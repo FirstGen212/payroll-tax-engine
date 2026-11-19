@@ -54,3 +54,19 @@ button:disabled { opacity: 0.5; cursor: default; }
   .layout { display: block; } main { padding: 0; }
   .panel.printable { border: none; }
 }
+
+/* proposal tool */
+.stepper { display: flex; gap: 24px; margin-bottom: 14px; }
+.stepper span { display: flex; align-items: center; gap: 8px; color: var(--muted); font-weight: 600; }
+.stepper b { width: 24px; height: 24px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; border: 2px solid var(--line); font-size: 12px; }
+.stepper .on { color: var(--ink); }
+.stepper .on b { border-color: var(--info); color: var(--info); }
+.stepper .done b { background: var(--ok); border-color: var(--ok); color: #fff; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; border-right: 1px solid var(--line); }
+.seg button:last-child { border-right: 0; }
+.seg button.on { background: var(--info); color: #fff; }
+.bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--line); margin: 6px 0; }
+.bar span { display: block; height: 100%; }
+.bar.tall { height: 18px; }
+.bar.tall span { color: #fff; font-size: 11px; font-weight: 700; text-align: center; line-height: 18px; overflow: hidden; }

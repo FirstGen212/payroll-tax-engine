@@ -62,35 +62,38 @@ export async function exportWorkbook(name: string, headers: string[], rawRows: R
   const sum = wb.addWorksheet('Summary');
   const s = result.summary;
   const usd = '"$"#,##0.00';
+  const pct = (n: number) => n;
   sum.addRows([
     ['Proposal', name],
     ['Plan year', result.settings.year],
-    ['Rows in file', s.rowsInFile ?? s.employees],
-    ['Duplicate rows (counted once)', s.duplicates?.length ?? 0],
-    ['Employees', s.employees],
-    ['Eligible before pricing', s.eligibleBeforePricing],
-    ['Eligible after pricing', s.eligibleAfterPricing],
+    ['Rows in file', s.rowsInFile],
+    ['Employees calculated', s.employees],
+    ['Eligible (full plan)', s.eligibleFull],
+    ['Eligible (part-time plan)', s.eligiblePartTime],
     [],
     ['Eligibility', 'Employees', 'Share'],
-    ...ELIGIBILITY_ORDER.filter((k) => s.byEligibility[k]).map((k) => [k, s.byEligibility[k], s.byEligibility[k] / s.employees]),
+    ...ELIGIBILITY_ORDER.filter((k) => s.byEligibility[k]).map((k) => [k, s.byEligibility[k], pct(s.byEligibility[k] / s.employees)]),
     [],
-    ['Eligible employees (annual estimates)', 'Amount'],
-    ['Employer tax savings', s.eligible.employerTaxSavings],
-    ['Employer fees', s.eligible.employerFees],
-    ['Employer net savings', s.eligible.employerNetSavings],
-    ['Employee tax savings', s.eligible.employeeTaxSavings],
-    ['Employee net take-home increase', s.eligible.employeeNetGain],
-    ['Average employee gain per month', s.eligible.avgEmployeeMonthlyGain],
-    ['Average employer savings per employee per month', s.eligible.avgEmployerMonthlySavings],
+    ['Estimates', 'Amount'],
+    ['Monthly savings (sum of allotments)', s.monthlySavings.total],
+    ['Annual savings (allotments x 12)', s.monthlySavings.annual],
+    ['Average allotment (full plan)', s.monthlySavings.average],
+    ['Employer annual tax savings', s.employerAnnualSavings.total],
+    ['Employer savings per employee', s.employerAnnualSavings.perEmployee],
+    [`Valuation increase (${result.settings.ebitdaMultiple}x EBITDA)`, s.valuationIncrease],
+    [],
+    ['Program price', 'Eligible', 'Monthly revenue', 'Benefit cost', 'Monthly margin', 'Margin %', '12-month margin'],
+    ...s.programs.map((p) => [p.price, p.eligible, p.monthlyRevenue, p.monthlyBenefitCost, p.monthlyMargin, p.marginPercent, p.annualMargin]),
     [],
     ['Estimates from the payroll tax engine; tax lines marked projected or unverified are not yet checked against agency sources.'],
   ]);
   sum.getColumn(1).width = 52;
   sum.getColumn(2).width = 18;
   sum.eachRow((r) => {
-    const v = r.getCell(2).value;
-    if (typeof v === 'number' && r.number > 17) r.getCell(2).numFmt = usd;
-    if (typeof r.getCell(3).value === 'number') r.getCell(3).numFmt = '0%';
+    const first = String(r.getCell(1).value ?? '');
+    if (/savings|allotment|valuation/i.test(first)) r.getCell(2).numFmt = usd;
+    if (s.byEligibility[first] !== undefined) r.getCell(3).numFmt = '0%';
+    if (typeof r.getCell(1).value === 'number') { [1, 3, 4, 5, 7].forEach((c) => (r.getCell(c).numFmt = usd)); r.getCell(6).numFmt = '0.0%'; }
   });
 
   const ws = wb.addWorksheet('Underwriting');
@@ -99,17 +102,17 @@ export async function exportWorkbook(name: string, headers: string[], rawRows: R
   const emp = (i: number) => byRow.get(i + 2);
   const setIf = (header: string | undefined, f: (i: number) => unknown) => { if (header) fill[header] = f; };
   const find = (re: RegExp) => headers.find((h) => re.test(h));
-  setIf(find(/^before taxes$/i), (i) => emp(i)?.monthly?.employeeTaxBefore);
-  setIf(find(/^after taxes$/i), (i) => emp(i)?.monthly?.employeeTaxAfter);
+  setIf(find(/^before taxes$/i), (i) => emp(i)?.perPeriod?.taxBefore);
+  setIf(find(/^after taxes$/i), (i) => emp(i)?.perPeriod?.taxAfter);
   setIf(find(/allotment/i), (i) => emp(i)?.monthly?.allotment);
   const dup = new Map((result.summary.duplicates ?? []).map((d) => [d.rowNumber, d.duplicateOf]));
   setIf(find(/^eligibility$/i), (i) => emp(i)?.eligibility ?? (dup.has(i + 2) ? `Duplicate of row ${dup.get(i + 2)}` : undefined));
-  const extra = ['Tier', 'New deduction per check', 'Employee tax savings / mo', 'Employer tax savings / mo', 'Employee take-home change / mo', 'Employer net savings / mo', 'Reason', 'Data flags'];
+  const extra = ['First Gen per check', 'Net per check', 'Employee tax savings / mo', 'Employer tax savings / mo', 'Eff. rate', 'PT allotment', 'Reason', 'Data flags'];
   ws.addRow([...headers, ...extra]).font = { bold: true };
   rawRows.forEach((r, i) => {
     const e = emp(i);
     const vals = headers.map((h) => (fill[h] ? fill[h](i) ?? r[h] : r[h]));
-    ws.addRow([...vals, e?.tier, e?.deductionPerCheck, e?.monthly?.employeeTaxSavings, e?.monthly?.employerTaxSavings, e?.monthly?.employeeNetGain, e?.monthly?.employerNetGain, e?.reasons.join(' '), e?.flags.join(' ')]);
+    ws.addRow([...vals, e?.deductionPerCheck, e?.perPeriod?.net, e?.monthly?.employeeTaxSavings, e?.monthly?.employerTaxSavings, e?.perPeriod?.effectiveRate, e?.partTime?.allotment, e?.reasons.join(' '), e?.flags.join(' ')]);
   });
   ws.views = [{ state: 'frozen', ySplit: 1 }];
   headers.concat(extra).forEach((h, i) => (ws.getColumn(i + 1).width = Math.min(Math.max(h.length + 2, 10), 40)));

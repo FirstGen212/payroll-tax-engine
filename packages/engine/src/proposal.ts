@@ -65,50 +65,69 @@ export interface CensusRow {
   birthDate?: string;
 }
 
-export interface ProposalTier {
+export interface BenefitPackage {
   id: string;
   name: string;
-  /** Employees qualify for the highest tier whose minimums they meet. */
-  minHoursPerWeek: number;
-  minAnnualGross?: number;
-  /** New pre-tax deduction. */
-  deductionAmount: number;
-  deductionPer: 'check' | 'month';
-  /** Share of the deduction paid back to the employee each check as a non-taxable benefit payment (0-1). */
-  benefitOffsetPercent: number;
-  /** Fee charged to the employer per employee per month (pricing). */
-  employerFeeMonthly: number;
-  /** Fee charged to the employee per month, after tax (pricing). */
-  employeeFeeMonthly: number;
+  /** Cost of the benefit per enrolled employee per month. */
+  monthlyCost: number;
+}
+
+/** Part-time plan: rows that fail the standard plan but trigger it get a smaller deduction. */
+export interface PartTimePlan {
+  enabled: boolean;
+  deductionPerCheck: number;
+  /** Minimum monthly allotment for the part-time plan. */
+  allotmentThreshold: number;
+  /** Triggers: average hours per week at or below this, or annual gross below maxAnnualGross. */
+  maxHoursPerWeek: number;
+  maxAnnualGross: number;
 }
 
 export interface ProposalSettings {
   /** Plan year: the engine runs every check date in this year. */
   year: number;
-  tiers: ProposalTier[];
-  /** Use the per-row proposed deduction from the sheet when present. */
+  /** First Gen pre-tax deduction per check when the file has no per-employee amount. */
+  deductionPerCheck: number;
+  /** Use the file's per-employee deduction amount when present. */
   useRowDeduction: boolean;
-  /** Is the row deduction per check or per month? */
   rowDeductionPer: 'check' | 'month';
+  benefitPackages: BenefitPackage[];
+  benefitPackageId: string;
+  /** Program price: the monthly allotment an employee needs to be eligible. */
+  allotmentThreshold: number;
+  /** Price points compared in the margin strategy analyzer. */
+  programPrices: number[];
   /** Annual gross at or below this is "Low Income". */
   lowIncomeMax: number;
-  /** Hours per week above this are flagged as suspicious. */
-  maxHoursPerWeek: number;
-  /** Rows with a data-confidence score below this go to NEEDS REVIEW (0 = off). */
-  reviewMinConfidence: number;
-  /** Minimum monthly increase in the employee's take-home pay after fees. */
-  minMonthlyEmployeeGain: number;
-  /** Minimum monthly employer savings after fees (0 = must not cost the employer). */
-  minMonthlyEmployerGain: number;
-  /** Monthly allotment = percent x base (the sheet's "Monthly Allotment (75%)"). */
-  allotmentPercent: number;
-  allotmentBase: 'deduction' | 'employee_tax_savings' | 'total_tax_savings';
+  /** Minimum average hours per pay period. */
+  minHoursPerPeriod: number;
+  /** Minimum state income tax per period in states that have one (flagged when below). */
+  stateTaxThreshold: number;
+  /** Monthly allotment at or above this goes to NEEDS REVIEW. */
+  needsReviewAllotment: number;
+  /** Monthly allotment = employee monthly tax savings x this buffer. */
+  allotmentBuffer: number;
+  /** Employees the file marks as having no federal tax withheld: a warning (still eligible) or their own status. */
+  noFederalTaxAs: 'warning' | 'status';
+  /** Add commission / bonus / other comp to gross pay. */
+  includeCommission: boolean;
   /** Count an employee once when the same company + ID + name appears on several rows. */
   dedupe: boolean;
+  partTime: PartTimePlan;
+  /** Employer savings basis: Social Security + Medicare only (7.65%), or all employer taxes (adds FUTA, SUI, etc.). */
+  employerSavingsBasis: 'fica' | 'all';
+  /** Share of the deduction returned to the employee each check as a tax-free benefit payment (for the take-home view). */
+  benefitPaybackPercent: number;
+  /** EBITDA multiple for the valuation-increase estimate. */
+  ebitdaMultiple: number;
+  industry?: string;
+  ownership?: 'private' | 'public';
   /** Hours assumed for salaried rows with no hours. */
   salariedHoursPerWeek: number;
   /** Gross values at or above this are treated as annual and divided by periods. */
   annualGrossThreshold: number;
+  /** Rows with a data-confidence score below this go to NEEDS REVIEW (0 = off). */
+  reviewMinConfidence: number;
   employer: { name?: string; homeState?: string; suiRates?: Record<string, number>; futaExempt?: boolean };
   conventions?: Partial<VendorConventions>;
   vendorProfileId?: string;
@@ -116,30 +135,44 @@ export interface ProposalSettings {
 
 export const DEFAULT_PROPOSAL_SETTINGS: ProposalSettings = {
   year: 2027,
-  tiers: [
-    { id: 'ft', name: 'Full-time', minHoursPerWeek: 30, deductionAmount: 298.38, deductionPer: 'check', benefitOffsetPercent: 1, employerFeeMonthly: 0, employeeFeeMonthly: 0 },
-    { id: 'pt', name: 'Part-time', minHoursPerWeek: 25, deductionAmount: 172.15, deductionPer: 'check', benefitOffsetPercent: 1, employerFeeMonthly: 0, employeeFeeMonthly: 0 },
-  ],
+  deductionPerCheck: 298.38,
   useRowDeduction: true,
   rowDeductionPer: 'check',
+  benefitPackages: [
+    { id: 'mec', name: 'MEC', monthlyCost: 55 },
+    { id: 'standard', name: 'Standard', monthlyCost: 65 },
+    { id: 'mec_plus', name: 'MEC Plus', monthlyCost: 95 },
+  ],
+  benefitPackageId: 'standard',
+  allotmentThreshold: 149,
+  programPrices: [159, 149, 139, 129],
   lowIncomeMax: 26000,
-  maxHoursPerWeek: 80,
-  reviewMinConfidence: 0,
-  minMonthlyEmployeeGain: 25,
-  minMonthlyEmployerGain: 0,
-  allotmentPercent: 0.75,
-  allotmentBase: 'deduction',
-  dedupe: true,
+  minHoursPerPeriod: 23,
+  stateTaxThreshold: 0.01,
+  needsReviewAllotment: 401,
+  allotmentBuffer: 0.75,
+  noFederalTaxAs: 'warning',
+  includeCommission: false,
+  dedupe: false,
+  partTime: { enabled: true, deductionPerCheck: 180, allotmentThreshold: 74, maxHoursPerWeek: 29, maxAnnualGross: 20000 },
+  employerSavingsBasis: 'fica',
+  benefitPaybackPercent: 1,
+  ebitdaMultiple: 5.2,
+  industry: 'Energy (Oil & Gas)',
+  ownership: 'private',
   salariedHoursPerWeek: 40,
   annualGrossThreshold: 20000,
+  reviewMinConfidence: 0,
   employer: {},
 };
 
 export type Eligibility =
   | 'Eligible'
+  | 'PT Eligible'
   | 'No Federal Taxes Paid'
   | 'NEEDS REVIEW'
   | 'Not Eligible - No Gross Compensation'
+  | 'Not Eligible - Insufficient Funds'
   | 'Not Eligible - Insufficient Hours'
   | 'Not Eligible - Low Income'
   | 'Not Eligible - Insufficient Savings'
@@ -147,12 +180,14 @@ export type Eligibility =
 
 export const ELIGIBILITY_ORDER: Eligibility[] = [
   'Eligible',
+  'PT Eligible',
   'No Federal Taxes Paid',
   'NEEDS REVIEW',
   'Not Eligible - Insufficient Savings',
   'Not Eligible - Insufficient Savings + No Federal Taxes Paid',
   'Not Eligible - Low Income',
   'Not Eligible - Insufficient Hours',
+  'Not Eligible - Insufficient Funds',
   'Not Eligible - No Gross Compensation',
 ];
 
@@ -163,65 +198,91 @@ export interface ScenarioTotals {
   stateLocal: number;
   employeeTaxes: number;
   employerTaxes: number;
+  /** Employer Social Security + Medicare. */
+  employerFica: number;
   newDeduction: number;
+  otherDeductions: number;
   benefitPayment: number;
   netPay: number;
 }
 
-export interface ProposalEmployeeResult {
+/** Per-pay-period view, as payroll registers show it. */
+export interface PerPeriod {
+  gross: number;
+  firstGen: number;
+  deductions: number;
+  /** Net after the First Gen deduction (before any benefit payment back). */
+  net: number;
+  taxBefore: number;
+  taxAfter: number;
+  stateTaxBefore: number;
+  /** Employee taxes after / gross. */
+  effectiveRate: number;
+}
+
+export interface PlanCalc {
+  deductionPerCheck: number;
+  perPeriod: PerPeriod;
+  check: { before: ScenarioTotals; after: ScenarioTotals };
+  annual: { before: ScenarioTotals; after: ScenarioTotals };
+  monthly: {
+    employeeTaxBefore: number;
+    employeeTaxAfter: number;
+    employeeTaxSavings: number;
+    employerTaxSavings: number;
+    allotment: number;
+    /** Take-home change per month including the benefit payment back. */
+    employeeNetGain: number;
+  };
+}
+
+export interface ProposalEmployeeResult extends Partial<PlanCalc> {
   key: string;
   row: CensusRow;
   name: string;
   frequency?: PayFrequency;
   periodsPerYear?: number;
+  hoursPerPeriod?: number;
   hoursPerWeek?: number;
   annualGross?: number;
-  tier?: string;
-  deductionPerCheck?: number;
-  /** Typical check (first check of the year). */
-  check?: { before: ScenarioTotals; after: ScenarioTotals };
-  /** Full-year totals. */
-  annual?: { before: ScenarioTotals; after: ScenarioTotals };
-  monthly?: {
-    employeeTaxBefore: number;
-    employeeTaxAfter: number;
-    employeeTaxSavings: number;
-    employerTaxSavings: number;
-    employeeNetGain: number;
-    employerNetGain: number;
-    allotment: number;
-    employerFee: number;
-    employeeFee: number;
-  };
   eligibility: Eligibility;
-  /** Eligibility on tax savings alone, before tier fees. */
-  eligibleBeforePricing: boolean;
+  /** Status under the standard plan before the part-time plan was tried. */
+  standardEligibility?: Eligibility;
+  /** Gates other than savings pass (used for price-point analysis). */
+  passesNonSavingsRules: boolean;
+  partTime?: { triggers: string[]; deductionPerCheck: number; allotment: number; savingsDelta: number; eligible: boolean; calc: PlanCalc };
   reasons: string[];
   flags: string[];
 }
 
+export interface ProgramAnalysis {
+  price: number;
+  eligible: number;
+  partTimeEligible: number;
+  monthlyRevenue: number;
+  monthlyBenefitCost: number;
+  monthlyMargin: number;
+  marginPercent: number;
+  annualMargin: number;
+}
+
 export interface ProposalSummary {
+  rowsInFile: number;
   employees: number;
   byEligibility: Record<string, number>;
-  eligibleBeforePricing: number;
-  eligibleAfterPricing: number;
-  /** Annual totals for the eligible group. */
-  eligible: {
-    count: number;
-    employerTaxSavings: number;
-    employeeTaxSavings: number;
-    employerFees: number;
-    employeeFees: number;
-    employerNetSavings: number;
-    employeeNetGain: number;
-    newDeductions: number;
-    avgEmployeeMonthlyGain: number;
-    avgEmployerMonthlySavings: number;
-  };
-  byTier: Record<string, number>;
+  eligibleFull: number;
+  eligiblePartTime: number;
+  eligibleTotal: number;
+  /** Sum of monthly allotments of eligible employees (full + part-time). */
+  monthlySavings: { total: number; full: number; partTime: number; average: number; annual: number };
+  /** Employer tax savings of eligible employees (basis per settings). */
+  employerAnnualSavings: { total: number; full: number; partTime: number; perEmployee: number };
+  employeeAnnualTaxSavings: number;
+  valuationIncrease: number;
+  allotmentDistribution: { below: number; near: number; atOrAbove: number; lowEdge: number; highEdge: number };
+  programs: ProgramAnalysis[];
+  benefitPackage: BenefitPackage;
   dataWarnings: number;
-  rowsInFile: number;
-  /** Rows skipped because the same employee already appeared earlier in the file. */
   duplicates: { rowNumber?: number; duplicateOf?: number; name: string }[];
 }
 
@@ -296,18 +357,25 @@ export function checkDatesFor(year: number, freq: PayFrequency): string[] {
 }
 
 function totalsOf(results: PayResult[], deductionCode: string, benefitPerCheck: number): ScenarioTotals {
-  const t: ScenarioTotals = { gross: 0, fit: 0, fica: 0, stateLocal: 0, employeeTaxes: 0, employerTaxes: 0, newDeduction: 0, benefitPayment: 0, netPay: 0 };
+  const t: ScenarioTotals = { gross: 0, fit: 0, fica: 0, stateLocal: 0, employeeTaxes: 0, employerTaxes: 0, employerFica: 0, newDeduction: 0, otherDeductions: 0, benefitPayment: 0, netPay: 0 };
   for (const r of results) {
     t.gross += r.grossPay;
     for (const x of r.taxes) {
-      if (x.payer !== 'employee') continue;
+      if (x.payer !== 'employee') {
+        if (x.kind === 'SS_ER' || x.kind === 'MED_ER') t.employerFica += x.amount;
+        continue;
+      }
       if (x.kind === 'FIT') t.fit += x.amount;
       else if (x.kind === 'SS_EE' || x.kind === 'MED_EE' || x.kind === 'MED_ADDL_EE') t.fica += x.amount;
       else t.stateLocal += x.amount;
     }
     t.employeeTaxes += r.employeeTaxes;
     t.employerTaxes += r.employerTaxes;
-    t.newDeduction += r.deductions.filter((d) => d.code === deductionCode).reduce((a, d) => a + d.amount, 0);
+    for (const d of r.deductions) {
+      if (d.employerPaid) continue;
+      if (d.code === deductionCode) t.newDeduction += d.amount;
+      else t.otherDeductions += d.amount;
+    }
     t.benefitPayment += benefitPerCheck;
     t.netPay += r.netPay + benefitPerCheck;
   }
@@ -318,7 +386,7 @@ function totalsOf(results: PayResult[], deductionCode: string, benefitPerCheck: 
 export const PROPOSAL_DEDUCTION_CODE = 'PROPOSED_125';
 
 /** Turn a census row into an engine pay input (without the new deduction). */
-export function payInputFromRow(row: CensusRow, freq: PayFrequency, grossPerCheck: number, s: ProposalSettings): { input: PayInput; notes: string[] } {
+export function payInputFromRow(row: CensusRow, freq: PayFrequency, grossPerCheck: number, s: ProposalSettings, otherComp = 0): { input: PayInput; notes: string[] } {
   const notes: string[] = [];
   const periods = PERIODS_PER_YEAR[freq];
   const perCheck = (monthly?: number) => (monthly ? r2((monthly * 12) / periods) : 0);
@@ -346,7 +414,7 @@ export function payInputFromRow(row: CensusRow, freq: PayFrequency, grossPerChec
   };
 
   const earnings: EarningLine[] = [{ code: 'REG', amount: grossPerCheck }];
-  if (row.otherComp) earnings.push({ code: 'COMMISSION', amount: row.otherComp });
+  if (otherComp) earnings.push({ code: 'COMMISSION', amount: otherComp });
 
   const deductions: DeductionLine[] = [];
   if (row.healthMonthly) deductions.push({ code: 'MED_125', amount: perCheck(row.healthMonthly) });
@@ -383,9 +451,52 @@ export function payInputFromRow(row: CensusRow, freq: PayFrequency, grossPerChec
   return { input, notes };
 }
 
-function pickTier(tiers: ProposalTier[], hoursPerWeek: number, annualGross: number): ProposalTier | undefined {
-  const sorted = [...tiers].sort((a, b) => b.minHoursPerWeek - a.minHoursPerWeek || (b.minAnnualGross ?? 0) - (a.minAnnualGross ?? 0));
-  return sorted.find((t) => hoursPerWeek >= t.minHoursPerWeek && annualGross >= (t.minAnnualGross ?? 0));
+const usd = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+
+/** Run one employee for a full year with and without a pre-tax deduction. */
+function planCalc(input: PayInput, freq: PayFrequency, grossPerCheck: number, dedPerCheck: number, s: ProposalSettings, db: TaxDatabase): PlanCalc {
+  const periods = PERIODS_PER_YEAR[freq];
+  const benefitPerCheck = r2(dedPerCheck * s.benefitPaybackPercent);
+  const dates = checkDatesFor(s.year, freq);
+  const withDed: PayInput = { ...input, deductions: [...(input.deductions ?? []), { code: PROPOSAL_DEDUCTION_CODE, amount: dedPerCheck }] };
+  const before = runSeries(input, dates, db);
+  const after = runSeries(withDed, dates, db);
+  const aB = totalsOf(before, PROPOSAL_DEDUCTION_CODE, 0);
+  const aA = totalsOf(after, PROPOSAL_DEDUCTION_CODE, benefitPerCheck);
+  const cB = totalsOf(before.slice(0, 1), PROPOSAL_DEDUCTION_CODE, 0);
+  const cA = totalsOf(after.slice(0, 1), PROPOSAL_DEDUCTION_CODE, benefitPerCheck);
+  const eeTaxSav = r2((aB.employeeTaxes - aA.employeeTaxes) / 12);
+  const erTaxSav = r2((s.employerSavingsBasis === 'fica' ? aB.employerFica - aA.employerFica : aB.employerTaxes - aA.employerTaxes) / 12);
+  const grossCheck = cB.gross;
+  return {
+    deductionPerCheck: dedPerCheck,
+    perPeriod: {
+      gross: grossCheck,
+      firstGen: dedPerCheck,
+      deductions: cB.otherDeductions,
+      net: r2(cA.netPay - cA.benefitPayment),
+      taxBefore: cB.employeeTaxes,
+      taxAfter: cA.employeeTaxes,
+      stateTaxBefore: cB.stateLocal,
+      effectiveRate: grossCheck ? Math.round((cA.employeeTaxes / grossCheck) * 1000) / 1000 : 0,
+    },
+    check: { before: cB, after: cA },
+    annual: { before: aB, after: aA },
+    monthly: {
+      employeeTaxBefore: r2(aB.employeeTaxes / 12),
+      employeeTaxAfter: r2(aA.employeeTaxes / 12),
+      employeeTaxSavings: eeTaxSav,
+      employerTaxSavings: erTaxSav,
+      allotment: r2(eeTaxSav * s.allotmentBuffer),
+      employeeNetGain: r2((aA.netPay - aB.netPay) / 12),
+    },
+  };
+  void periods; void grossPerCheck;
+}
+
+function unverifiedLines(input: PayInput, s: ProposalSettings, db: TaxDatabase): string[] {
+  const r = runSeries(input, [`${s.year}-01-15`], db)[0];
+  return [...new Set(r.taxes.filter((t) => t.status !== 'published' && t.status !== 'draft').map((t) => `${t.jurisdiction} ${t.kind} (${t.status})`))];
 }
 
 export function evaluateEmployee(row: CensusRow, s: ProposalSettings, db: TaxDatabase): ProposalEmployeeResult {
@@ -395,7 +506,7 @@ export function evaluateEmployee(row: CensusRow, s: ProposalSettings, db: TaxDat
     row,
     name,
     eligibility: 'NEEDS REVIEW',
-    eligibleBeforePricing: false,
+    passesNonSavingsRules: false,
     reasons: [],
     flags: [],
   };
@@ -404,7 +515,6 @@ export function evaluateEmployee(row: CensusRow, s: ProposalSettings, db: TaxDat
     res.reasons.push(why);
     return res;
   };
-  const usd = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 
   // 1. Data needed to calculate at all
   const freq = parseFrequency(row.payFrequency, row.periodsPerYear);
@@ -421,152 +531,161 @@ export function evaluateEmployee(row: CensusRow, s: ProposalSettings, db: TaxDat
     res.flags.push(`Gross ${gross.toLocaleString()} looks annual; divided by ${periods} pay periods.`);
     gross = r2(gross / periods);
   }
+  const otherComp = s.includeCommission ? row.otherComp ?? 0 : 0;
+  if (!s.includeCommission && row.otherComp) res.flags.push(`Commission/bonus of ${usd(row.otherComp)} per check left out (turn on "Include commission/bonus").`);
   res.frequency = freq;
   res.periodsPerYear = periods;
-  const annualGross = r2((gross + (row.otherComp ?? 0)) * periods);
+  const annualGross = r2((gross + otherComp) * periods);
   res.annualGross = annualGross;
 
-  let hoursPerWeek: number | undefined;
-  if (row.hoursPerPeriod && row.hoursPerPeriod > 0) hoursPerWeek = row.hoursPerPeriod / WEEKS_PER_PERIOD[freq];
-  else if (/salar/i.test(row.employmentType ?? '')) {
-    hoursPerWeek = s.salariedHoursPerWeek;
+  let hoursPerPeriod: number | undefined;
+  if (row.hoursPerPeriod !== undefined && row.hoursPerPeriod !== null) hoursPerPeriod = row.hoursPerPeriod;
+  if ((!hoursPerPeriod || hoursPerPeriod <= 0) && /salar/i.test(row.employmentType ?? '')) {
+    hoursPerPeriod = s.salariedHoursPerWeek * WEEKS_PER_PERIOD[freq];
     res.flags.push(`Salaried with no hours: ${s.salariedHoursPerWeek} hours/week assumed.`);
   }
-  if (hoursPerWeek !== undefined) res.hoursPerWeek = Math.round(hoursPerWeek * 10) / 10;
-  if (hoursPerWeek !== undefined && hoursPerWeek > s.maxHoursPerWeek) res.flags.push(`${res.hoursPerWeek} hours/week is above ${s.maxHoursPerWeek}; check the hours column.`);
-
-  // 2. Tier by hours (highest qualifying); when none qualifies, price on the lowest tier so savings can still be shown.
-  const qualified = hoursPerWeek === undefined ? undefined : pickTier(s.tiers, hoursPerWeek, annualGross);
-  const tier = qualified ?? [...s.tiers].sort((a, b) => a.minHoursPerWeek - b.minHoursPerWeek)[0];
-  if (!tier) return fail('NEEDS REVIEW', 'No pricing tiers are set up.');
-  res.tier = qualified?.name;
-  if (!qualified) res.flags.push(`Below every tier's hours minimum; savings shown using the ${tier.name} tier pricing.`);
-
-  const useRow = s.useRowDeduction && row.proposedDeduction && row.proposedDeduction > 0;
-  const amount = useRow ? row.proposedDeduction! : tier.deductionAmount;
-  const per = useRow ? s.rowDeductionPer : tier.deductionPer;
-  const dedPerCheck = r2(per === 'check' ? amount : (amount * 12) / periods);
-  res.deductionPerCheck = dedPerCheck;
-  const benefitPerCheck = r2(dedPerCheck * tier.benefitOffsetPercent);
-
-  const { input, notes } = payInputFromRow(row, freq, gross, s);
-  res.flags.push(...notes);
-  const fitCalcFor = (r: PayResult[]) => r.reduce((a, x) => a + x.taxes.filter((t) => t.kind === 'FIT').reduce((b, t) => b + t.amount, 0), 0);
-  const existingPretax = (input.deductions ?? []).reduce((a, d) => a + (d.amount ?? (d.percent ?? 0) * gross), 0);
-  const noFedFromSheet = row.federalTaxPaid === false;
-
-  // 3. Before / after, full year
-  if (dedPerCheck + existingPretax > gross) {
-    const why = `New deduction ${usd(dedPerCheck)} plus existing deductions exceed gross pay per check (${usd(gross)}).`;
-    return fail(noFedFromSheet ? 'Not Eligible - Insufficient Savings + No Federal Taxes Paid' : 'Not Eligible - Insufficient Savings', why);
+  if (hoursPerPeriod !== undefined) {
+    res.hoursPerPeriod = Math.round(hoursPerPeriod * 100) / 100;
+    res.hoursPerWeek = Math.round((hoursPerPeriod / WEEKS_PER_PERIOD[freq]) * 10) / 10;
   }
-  const dates = checkDatesFor(s.year, freq);
-  const withDed: PayInput = { ...input, deductions: [...(input.deductions ?? []), { code: PROPOSAL_DEDUCTION_CODE, amount: dedPerCheck }] };
-  const before = runSeries(input, dates, db);
-  const after = runSeries(withDed, dates, db);
-  const aB = totalsOf(before, PROPOSAL_DEDUCTION_CODE, 0);
-  const aA = totalsOf(after, PROPOSAL_DEDUCTION_CODE, benefitPerCheck);
-  res.annual = { before: aB, after: aA };
-  res.check = { before: totalsOf(before.slice(0, 1), PROPOSAL_DEDUCTION_CODE, 0), after: totalsOf(after.slice(0, 1), PROPOSAL_DEDUCTION_CODE, benefitPerCheck) };
-  const unverified = new Set(before.concat(after).flatMap((r) => r.taxes).filter((t) => t.status !== 'published' && t.status !== 'draft').map((t) => `${t.jurisdiction} ${t.kind} (${t.status})`));
-  if (unverified.size) res.flags.push(`Uses tax data not yet verified: ${[...unverified].join(', ')}.`);
 
-  const eeTaxSav = r2((aB.employeeTaxes - aA.employeeTaxes) / 12);
-  const erTaxSav = r2((aB.employerTaxes - aA.employerTaxes) / 12);
-  const eeGainBeforeFees = r2((aA.netPay - aB.netPay) / 12);
-  const eeGain = r2(eeGainBeforeFees - tier.employeeFeeMonthly);
-  const erGain = r2(erTaxSav - tier.employerFeeMonthly);
-  const dedMonthly = r2((dedPerCheck * periods) / 12);
-  const allotBase = s.allotmentBase === 'deduction' ? dedMonthly : s.allotmentBase === 'employee_tax_savings' ? eeTaxSav : eeTaxSav + erTaxSav;
-  res.monthly = {
-    employeeTaxBefore: r2(aB.employeeTaxes / 12),
-    employeeTaxAfter: r2(aA.employeeTaxes / 12),
-    employeeTaxSavings: eeTaxSav,
-    employerTaxSavings: erTaxSav,
-    employeeNetGain: eeGain,
-    employerNetGain: erGain,
-    allotment: r2(allotBase * s.allotmentPercent),
-    employerFee: tier.employerFeeMonthly,
-    employeeFee: tier.employeeFeeMonthly,
-  };
+  // 2. Before / after on the standard plan
+  const useRow = s.useRowDeduction && row.proposedDeduction && row.proposedDeduction > 0;
+  const dedPerCheck = r2(useRow ? (s.rowDeductionPer === 'check' ? row.proposedDeduction! : (row.proposedDeduction! * 12) / periods) : s.deductionPerCheck);
+  const { input, notes } = payInputFromRow(row, freq, gross, s, otherComp);
+  res.flags.push(...notes);
+  const existing = (input.deductions ?? []).reduce((a, d) => a + (d.amount ?? (d.percent ?? 0) * gross), 0);
+  const noFed = row.federalTaxPaid === false;
 
-  // Federal tax paid: the sheet's flag when given, else the engine's calculation.
-  const fitBefore = fitCalcFor(before);
+  if (dedPerCheck + existing > gross + otherComp) {
+    res.deductionPerCheck = dedPerCheck;
+    res.perPeriod = { gross: gross + otherComp, firstGen: dedPerCheck, deductions: r2(existing), net: r2(gross + otherComp - existing - dedPerCheck), taxBefore: 0, taxAfter: 0, stateTaxBefore: 0, effectiveRate: 0 };
+    fail('Not Eligible - Insufficient Funds', `Deduction ${usd(dedPerCheck)} plus existing deductions exceed gross pay per check (${usd(gross + otherComp)}).`);
+    return tryPartTime(res, input, freq, gross, s, db);
+  }
+  Object.assign(res, planCalc(input, freq, gross, dedPerCheck, s, db));
+  const unv = unverifiedLines(input, s, db);
+  if (unv.length) res.flags.push(`Uses tax data not yet verified: ${unv.join(', ')}.`);
+  const m = res.monthly!;
+
+  const fitBefore = res.annual!.before.fit;
   if (row.federalTaxPaid === true && fitBefore === 0) res.flags.push('Sheet says federal tax is withheld, but the engine calculates none from this W-4 and pay.');
   if (row.federalTaxPaid === false && fitBefore > 0) res.flags.push(`Sheet says no federal tax is withheld, but the engine calculates ${usd(fitBefore / periods)} per check.`);
-  if (row.stateTaxPaid === true && aB.stateLocal === 0) res.flags.push('Sheet says state tax is withheld, but the engine calculates none (no-income-tax state or below the threshold).');
-  const noFed = row.federalTaxPaid === false || (row.federalTaxPaid == null && fitBefore === 0);
+  const hasSit = db.rules.some((r) => r.jurisdiction === row.workState && r.kind === 'SIT' && r.calc.kind !== 'none');
+  if (hasSit && res.perPeriod!.stateTaxBefore < s.stateTaxThreshold) res.flags.push(`State tax per check ${usd(res.perPeriod!.stateTaxBefore)} is below the ${usd(s.stateTaxThreshold)} state tax threshold.`);
+  if (row.stateTaxPaid === true && res.perPeriod!.stateTaxBefore === 0) res.flags.push('Sheet says state tax is withheld, but the engine calculates none (no-income-tax state or below the threshold).');
 
-  // 4. Eligibility, in the order the underwriting sheet applies it
-  res.eligibleBeforePricing = eeGainBeforeFees >= s.minMonthlyEmployeeGain && erTaxSav >= s.minMonthlyEmployerGain;
-  const enoughSavings = eeGain >= s.minMonthlyEmployeeGain && erGain >= s.minMonthlyEmployerGain;
-  if (!enoughSavings) {
-    const why: string[] = [];
-    if (eeGain < s.minMonthlyEmployeeGain) why.push(`employee take-home rises ${usd(eeGain)}/month (minimum ${usd(s.minMonthlyEmployeeGain)})`);
-    if (erGain < s.minMonthlyEmployerGain) why.push(`employer saves ${usd(erGain)}/month after fees (minimum ${usd(s.minMonthlyEmployerGain)})`);
-    return fail(noFed ? 'Not Eligible - Insufficient Savings + No Federal Taxes Paid' : 'Not Eligible - Insufficient Savings', why.join('; ') + '.');
+  // 3. Eligibility, in the order the current tool applies it
+  if (m.allotment < s.allotmentThreshold) {
+    fail(noFed ? 'Not Eligible - Insufficient Savings + No Federal Taxes Paid' : 'Not Eligible - Insufficient Savings', `Monthly allotment ${usd(m.allotment)} is below the ${usd(s.allotmentThreshold)} threshold.`);
+  } else if (annualGross <= s.lowIncomeMax) {
+    fail('Not Eligible - Low Income', `Annual gross ${usd(annualGross)} is at or below ${usd(s.lowIncomeMax)}.`);
+  } else if (noFed && s.noFederalTaxAs === 'status') {
+    fail('No Federal Taxes Paid', 'No federal income tax is withheld today according to the file; review before enrolling.');
+  } else if (m.allotment >= s.needsReviewAllotment) {
+    fail('NEEDS REVIEW', `Monthly allotment ${usd(m.allotment)} is at or above the ${usd(s.needsReviewAllotment)} review threshold.`);
+  } else if (hoursPerPeriod === undefined) {
+    fail('NEEDS REVIEW', 'Hours missing for an hourly employee.');
+  } else if (hoursPerPeriod < s.minHoursPerPeriod) {
+    fail('Not Eligible - Insufficient Hours', `${res.hoursPerPeriod} hours per pay period is below the ${s.minHoursPerPeriod}-hour minimum.`);
+  } else if (s.reviewMinConfidence > 0 && row.confidence !== undefined && row.confidence < s.reviewMinConfidence) {
+    fail('NEEDS REVIEW', `Data confidence ${row.confidence} is below ${s.reviewMinConfidence}.`);
+  } else {
+    res.eligibility = 'Eligible';
   }
-  if (annualGross <= s.lowIncomeMax) return fail('Not Eligible - Low Income', `Annual gross ${usd(annualGross)} is at or below ${usd(s.lowIncomeMax)}.`);
-  if (noFed) return fail('No Federal Taxes Paid', 'Savings meet the minimums, but no federal income tax is withheld today; review before enrolling.');
-  if (hoursPerWeek === undefined) return fail('NEEDS REVIEW', 'Hours missing for an hourly employee.');
-  if (!qualified) {
-    const min = Math.min(...s.tiers.map((t) => t.minHoursPerWeek));
-    return fail('Not Eligible - Insufficient Hours', `${res.hoursPerWeek} hours/week is below the ${min}-hour minimum.`);
+  // Everything except the allotment test (for the price-point analyzer)
+  if (noFed && s.noFederalTaxAs === 'warning') res.flags.unshift('⚠ No federal income tax withheld today according to the file.');
+  res.passesNonSavingsRules = annualGross > s.lowIncomeMax && !(noFed && s.noFederalTaxAs === 'status') && hoursPerPeriod !== undefined && hoursPerPeriod >= s.minHoursPerPeriod;
+  return tryPartTime(res, input, freq, gross, s, db);
+}
+
+/** Rows that fail the standard plan but trigger the part-time plan are re-run with the smaller deduction. */
+function tryPartTime(res: ProposalEmployeeResult, input: PayInput, freq: PayFrequency, gross: number, s: ProposalSettings, db: TaxDatabase): ProposalEmployeeResult {
+  const pt = s.partTime;
+  if (!pt?.enabled || res.eligibility === 'Eligible' || res.eligibility === 'NEEDS REVIEW' || res.eligibility === 'No Federal Taxes Paid') return res;
+  if (res.eligibility === 'Not Eligible - No Gross Compensation' || res.eligibility.includes('No Federal Taxes Paid')) return res;
+  const triggers: string[] = [];
+  if (res.hoursPerWeek !== undefined && res.hoursPerWeek <= pt.maxHoursPerWeek) triggers.push(`≤${pt.maxHoursPerWeek}hrs`);
+  if (res.annualGross !== undefined && res.annualGross < pt.maxAnnualGross) triggers.push(`<$${Math.round(pt.maxAnnualGross / 1000)}k/yr`);
+  if (!triggers.length) return res;
+  const existing = (input.deductions ?? []).reduce((a, d) => a + (d.amount ?? (d.percent ?? 0) * gross), 0);
+  if (pt.deductionPerCheck + existing > gross) return res;
+  const calc = planCalc(input, freq, gross, pt.deductionPerCheck, s, db);
+  const eligible = calc.monthly.allotment >= pt.allotmentThreshold;
+  res.partTime = { triggers, deductionPerCheck: pt.deductionPerCheck, allotment: calc.monthly.allotment, savingsDelta: r2(calc.monthly.allotment - (res.monthly?.allotment ?? 0)), eligible, calc };
+  if (eligible) {
+    res.standardEligibility = res.eligibility;
+    res.eligibility = 'PT Eligible';
+    res.reasons.push(`Qualifies for the part-time plan: ${usd(pt.deductionPerCheck)} per check, allotment ${usd(calc.monthly.allotment)}/month (minimum ${usd(pt.allotmentThreshold)}).`);
   }
-  if (s.reviewMinConfidence > 0 && row.confidence !== undefined && row.confidence < s.reviewMinConfidence)
-    return fail('NEEDS REVIEW', `Data confidence ${row.confidence} is below ${s.reviewMinConfidence}.`);
-  res.eligibility = 'Eligible';
   return res;
 }
 
 export function runProposal(rows: CensusRow[], settings: Partial<ProposalSettings> = {}, db: TaxDatabase = loadTaxDatabase()): ProposalResult {
-  const s: ProposalSettings = { ...DEFAULT_PROPOSAL_SETTINGS, ...settings, employer: { ...DEFAULT_PROPOSAL_SETTINGS.employer, ...(settings.employer ?? {}) } };
-  // The same employee can appear more than once (several checks in a register); count each person once.
+  const s: ProposalSettings = {
+    ...DEFAULT_PROPOSAL_SETTINGS,
+    ...settings,
+    partTime: { ...DEFAULT_PROPOSAL_SETTINGS.partTime, ...(settings.partTime ?? {}) },
+    employer: { ...DEFAULT_PROPOSAL_SETTINGS.employer, ...(settings.employer ?? {}) },
+  };
+  // The same employee can appear more than once (several checks in a register).
   const seen = new Map<string, number>();
   const duplicates: { rowNumber?: number; duplicateOf?: number; name: string }[] = [];
-  const unique = rows.filter((r) => {
-    if (!s.dedupe) return true;
+  for (const r of rows) {
+    if (!r.employeeId && !r.firstName && !r.lastName) continue;
     const who = `${r.company ?? ''}|${r.employeeId ?? ''}|${r.firstName ?? ''}|${r.lastName ?? ''}`.toLowerCase();
-    if (!r.employeeId && !r.firstName && !r.lastName) return true;
-    if (seen.has(who)) {
-      duplicates.push({ rowNumber: r.rowNumber, duplicateOf: seen.get(who), name: [r.firstName, r.lastName].filter(Boolean).join(' ') || r.employeeId || '' });
-      return false;
-    }
-    seen.set(who, r.rowNumber ?? 0);
-    return true;
-  });
-  const employees = unique.map((r) => evaluateEmployee({ ...r }, s, db));
-  const byEligibility: Record<string, number> = {};
-  const byTier: Record<string, number> = {};
-  const el = { count: 0, employerTaxSavings: 0, employeeTaxSavings: 0, employerFees: 0, employeeFees: 0, employerNetSavings: 0, employeeNetGain: 0, newDeductions: 0, avgEmployeeMonthlyGain: 0, avgEmployerMonthlySavings: 0 };
-  for (const e of employees) {
-    byEligibility[e.eligibility] = (byEligibility[e.eligibility] ?? 0) + 1;
-    if (e.eligibility !== 'Eligible' || !e.monthly || !e.annual) continue;
-    el.count++;
-    byTier[e.tier!] = (byTier[e.tier!] ?? 0) + 1;
-    el.employerTaxSavings += e.monthly.employerTaxSavings * 12;
-    el.employeeTaxSavings += e.monthly.employeeTaxSavings * 12;
-    el.employerFees += e.monthly.employerFee * 12;
-    el.employeeFees += e.monthly.employeeFee * 12;
-    el.employerNetSavings += e.monthly.employerNetGain * 12;
-    el.employeeNetGain += e.monthly.employeeNetGain * 12;
-    el.newDeductions += e.annual.after.newDeduction;
+    if (seen.has(who)) duplicates.push({ rowNumber: r.rowNumber, duplicateOf: seen.get(who), name: [r.firstName, r.lastName].filter(Boolean).join(' ') || r.employeeId || '' });
+    else seen.set(who, r.rowNumber ?? 0);
   }
-  for (const k of Object.keys(el) as (keyof typeof el)[]) if (k !== 'count') el[k] = r2(el[k]);
-  el.avgEmployeeMonthlyGain = el.count ? r2(el.employeeNetGain / el.count / 12) : 0;
-  el.avgEmployerMonthlySavings = el.count ? r2(el.employerNetSavings / el.count / 12) : 0;
+  const skip = new Set(s.dedupe ? duplicates.map((d) => d.rowNumber) : []);
+  const employees = rows.filter((r) => !skip.has(r.rowNumber)).map((r) => evaluateEmployee({ ...r }, s, db));
+
+  const byEligibility: Record<string, number> = {};
+  for (const e of employees) byEligibility[e.eligibility] = (byEligibility[e.eligibility] ?? 0) + 1;
+  const full = employees.filter((e) => e.eligibility === 'Eligible');
+  const pt = employees.filter((e) => e.eligibility === 'PT Eligible');
+  const sum = (xs: number[]) => r2(xs.reduce((a, b) => a + b, 0));
+  const msFull = sum(full.map((e) => e.monthly!.allotment));
+  const msPt = sum(pt.map((e) => e.partTime!.allotment));
+  const erFull = sum(full.map((e) => e.monthly!.employerTaxSavings * 12));
+  const erPt = sum(pt.map((e) => e.partTime!.calc.monthly.employerTaxSavings * 12));
+  const pkg = s.benefitPackages.find((p) => p.id === s.benefitPackageId) ?? s.benefitPackages[0];
+  const withAllot = employees.filter((e) => e.monthly);
+  const prices = [...s.programPrices].sort((a, b) => b - a);
+  const lowEdge = s.allotmentThreshold - 10;
+
+  const programs: ProgramAnalysis[] = prices.map((price) => {
+    const eligible = employees.filter((e) => e.passesNonSavingsRules && e.monthly && e.monthly.allotment >= price && e.monthly.allotment < s.needsReviewAllotment).length;
+    const revenue = eligible * price;
+    const cost = eligible * (pkg?.monthlyCost ?? 0);
+    return { price, eligible, partTimeEligible: pt.length, monthlyRevenue: r2(revenue), monthlyBenefitCost: r2(cost), monthlyMargin: r2(revenue - cost), marginPercent: revenue ? Math.round(((revenue - cost) / revenue) * 1000) / 1000 : 0, annualMargin: r2((revenue - cost) * 12) };
+  });
+
+  const erTotal = r2(erFull + erPt);
   return {
     settings: s,
     employees,
     summary: {
+      rowsInFile: rows.length,
       employees: employees.length,
       byEligibility,
-      eligibleBeforePricing: employees.filter((e) => e.eligibleBeforePricing).length,
-      eligibleAfterPricing: el.count,
-      eligible: el,
-      byTier,
+      eligibleFull: full.length,
+      eligiblePartTime: pt.length,
+      eligibleTotal: full.length + pt.length,
+      monthlySavings: { total: r2(msFull + msPt), full: msFull, partTime: msPt, average: full.length ? r2(msFull / full.length) : 0, annual: r2((msFull + msPt) * 12) },
+      employerAnnualSavings: { total: erTotal, full: erFull, partTime: erPt, perEmployee: full.length ? r2(erFull / full.length) : 0 },
+      employeeAnnualTaxSavings: sum(full.map((e) => e.monthly!.employeeTaxSavings * 12).concat(pt.map((e) => e.partTime!.calc.monthly.employeeTaxSavings * 12))),
+      valuationIncrease: r2(erTotal * s.ebitdaMultiple),
+      allotmentDistribution: {
+        below: withAllot.filter((e) => e.monthly!.allotment < lowEdge).length,
+        near: withAllot.filter((e) => e.monthly!.allotment >= lowEdge && e.monthly!.allotment < s.allotmentThreshold).length,
+        atOrAbove: withAllot.filter((e) => e.monthly!.allotment >= s.allotmentThreshold).length,
+        lowEdge,
+        highEdge: s.allotmentThreshold,
+      },
+      programs,
+      benefitPackage: pkg,
       dataWarnings: employees.reduce((a, e) => a + e.flags.length, 0),
-      rowsInFile: rows.length,
       duplicates,
     },
   };

@@ -4,52 +4,77 @@ import { autoMapColumns, checkDatesFor, parseFederalStatus, parseFrequency, rows
 import type { CensusRow } from '../src/index.js';
 
 const db = loadTaxDatabase();
-const tier = { id: 'ft', name: 'Full-time', minHoursPerWeek: 30, deductionAmount: 200, deductionPer: 'check' as const, benefitOffsetPercent: 1, employerFeeMonthly: 0, employeeFeeMonthly: 0 };
 const base: CensusRow = { rowNumber: 2, employeeId: '1', firstName: 'Pat', lastName: 'Lee', workState: 'TX', grossPay: 1000, payFrequency: 'Weekly', hoursPerPeriod: 40, federalFilingStatus: 'Single' };
+const std = { year: 2027, deductionPerCheck: 200, useRowDeduction: false, allotmentThreshold: 100 };
 
 describe('proposal tool', () => {
-  it('weekly $1,000 TX single, $200/check pre-tax with 100% benefit payment back', () => {
-    const r = runProposal([base], { year: 2027, tiers: [tier], useRowDeduction: false }, db);
+  it('weekly $1,000 TX single with a $200/check pre-tax deduction', () => {
+    const r = runProposal([base], std, db);
     const e = r.employees[0];
     expect(e.eligibility).toBe('Eligible');
     // FICA 7.65% x 200 = 15.30 and FIT 12% x 200 = 24.00 per check; 52 checks / 12 months
     expect(e.monthly!.employeeTaxSavings).toBeCloseTo((39.3 * 52) / 12, 1);
-    expect(e.monthly!.employeeNetGain).toBeCloseTo((39.3 * 52) / 12, 1);
-    // Employer: FICA only. FUTA ($7,000) and TX SUI ($9,000) wage bases are reached either way over a full year.
+    expect(e.monthly!.allotment).toBeCloseTo(((39.3 * 52) / 12) * 0.75, 1);
+    // Employer FICA only: 7.65% x 200 x 52 / 12
     expect(e.monthly!.employerTaxSavings).toBeCloseTo((15.3 * 52) / 12, 1);
-    expect(e.check!.after.fica).toBeCloseTo(e.check!.before.fica - 15.3, 2);
+    // Per period, as the register shows it
+    expect(e.perPeriod!.taxBefore - e.perPeriod!.taxAfter).toBeCloseTo(39.3, 2);
+    expect(e.perPeriod!.net).toBeCloseTo(1000 - 200 - e.perPeriod!.taxAfter, 2);
+    expect(r.summary.employerAnnualSavings.total).toBeCloseTo(15.3 * 52, 1);
+    expect(r.summary.valuationIncrease).toBeCloseTo(15.3 * 52 * 5.2, 0);
   });
 
-  it('applies the eligibility rules in order', () => {
+  it('applies the eligibility rules in the current tool\'s order', () => {
     const rows: CensusRow[] = [
       { ...base, employeeId: 'a', grossPay: 0 },
-      { ...base, employeeId: 'b', grossPay: 400 }, // $20,800/yr: low income
-      { ...base, employeeId: 'c', hoursPerPeriod: 20 }, // below the 30-hour tier
-      { ...base, employeeId: 'd', federalTaxPaid: false },
-      { ...base, employeeId: 'e', grossPay: 150 }, // deduction exceeds pay
+      { ...base, employeeId: 'b', grossPay: 150 }, // deduction exceeds pay
+      { ...base, employeeId: 'c', grossPay: 480 }, // $24,960/yr
+      { ...base, employeeId: 'd', hoursPerPeriod: 20 },
+      { ...base, employeeId: 'e', federalTaxPaid: false },
       { ...base, employeeId: 'f', payFrequency: 'sometimes' },
+      { ...base, employeeId: 'g', grossPay: 3000, workState: 'CA', proposedDeduction: 600 },
     ];
-    const r = runProposal(rows, { tiers: [tier], useRowDeduction: false }, db);
+    const r = runProposal(rows, { ...std, useRowDeduction: true, partTime: { enabled: false } as any }, db);
     expect(r.employees.map((e) => e.eligibility)).toEqual([
       'Not Eligible - No Gross Compensation',
+      'Not Eligible - Insufficient Funds',
       'Not Eligible - Low Income',
       'Not Eligible - Insufficient Hours',
-      'No Federal Taxes Paid',
-      'Not Eligible - Insufficient Savings',
+      'Eligible',
+      'NEEDS REVIEW',
       'NEEDS REVIEW',
     ]);
+    expect(r.employees[4].flags[0]).toMatch(/No federal income tax/);
+    expect(r.employees[6].reasons[0]).toMatch(/review threshold/);
+    const strict = runProposal([rows[4]], { ...std, noFederalTaxAs: 'status' }, db);
+    expect(strict.employees[0].eligibility).toBe('No Federal Taxes Paid');
   });
 
-  it('employer and employee fees move people from eligible to not eligible', () => {
-    const priced = { ...tier, employeeFeeMonthly: 200 };
-    const r = runProposal([base], { tiers: [priced], useRowDeduction: false }, db);
-    expect(r.employees[0].eligibleBeforePricing).toBe(true);
+  it('savings below the allotment threshold are insufficient; the price analyzer counts each price point', () => {
+    const r = runProposal([base], { ...std, allotmentThreshold: 149, partTime: { enabled: false } as any }, db);
+    expect(r.employees[0].monthly!.allotment).toBeLessThan(149);
     expect(r.employees[0].eligibility).toBe('Not Eligible - Insufficient Savings');
-    expect(r.summary.eligibleAfterPricing).toBe(0);
+    const at = (p: number) => r.summary.programs.find((x) => x.price === p)!.eligible;
+    expect(at(159)).toBe(0);
+    expect(at(129)).toBe(0);
+    const lower = runProposal([base], { ...std, programPrices: [129, 99] }, db);
+    expect(lower.summary.programs.find((x) => x.price === 99)!.eligible).toBe(1);
   });
 
-  it('counts a repeated employee once', () => {
-    const r = runProposal([base, { ...base, rowNumber: 3 }], { tiers: [tier] }, db);
+  it('moves part-time triggers to the part-time plan', () => {
+    const r = runProposal([{ ...base, hoursPerPeriod: 20 }], { ...std, partTime: { enabled: true, deductionPerCheck: 120, allotmentThreshold: 50, maxHoursPerWeek: 29, maxAnnualGross: 20000 } }, db);
+    const e = r.employees[0];
+    expect(e.standardEligibility).toBe('Not Eligible - Insufficient Hours');
+    expect(e.eligibility).toBe('PT Eligible');
+    expect(e.partTime!.triggers).toEqual(['≤29hrs']);
+    expect(e.partTime!.allotment).toBeCloseTo(((120 * 0.0765 + 120 * 0.12) * 52 / 12) * 0.75, 0);
+    expect(r.summary.eligiblePartTime).toBe(1);
+  });
+
+  it('flags repeated employees and can count them once', () => {
+    const rows = [base, { ...base, rowNumber: 3 }];
+    expect(runProposal(rows, std, db).employees).toHaveLength(2);
+    const r = runProposal(rows, { ...std, dedupe: true }, db);
     expect(r.employees).toHaveLength(1);
     expect(r.summary.duplicates).toEqual([{ rowNumber: 3, duplicateOf: 2, name: 'Pat Lee' }]);
   });
