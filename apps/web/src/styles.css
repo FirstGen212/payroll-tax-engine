@@ -1,12 +1,14 @@
 :root {
   --bg: #f6f7f9; --panel: #ffffff; --ink: #1b1f24; --muted: #5d6673; --line: #e2e5ea; --accent: #1f5fbf; --accent-ink: #fff;
   --ok: #1d7a46; --ok-bg: #e5f4ea; --warn: #8a5a00; --warn-bg: #fdf1d8; --bad: #a12828; --bad-bg: #fbe5e5; --info: #2b5797; --info-bg: #e5edf9;
-  --radius: 8px; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color: var(--ink); background: var(--bg);
+  --on-fill: #fff; color-scheme: light; --radius: 8px; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color: var(--ink); background: var(--bg);
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #12151a; --panel: #1a1f26; --ink: #e8ebef; --muted: #9aa4b1; --line: #2c333d; --accent: #5b9bff; --accent-ink: #0b1220;
-    --ok: #6fd39b; --ok-bg: #173325; --warn: #f0c060; --warn-bg: #3a2e12; --bad: #ff8a8a; --bad-bg: #3b1a1a; --info: #9cc0ff; --info-bg: #1a2a45; }
+  :root:not([data-theme="light"]) { --bg: #12151a; --panel: #1a1f26; --ink: #e8ebef; --muted: #9aa4b1; --line: #2c333d; --accent: #5b9bff; --accent-ink: #0b1220;
+    --ok: #6fd39b; --ok-bg: #173325; --warn: #f0c060; --warn-bg: #3a2e12; --bad: #ff8a8a; --bad-bg: #3b1a1a; --info: #9cc0ff; --info-bg: #1a2a45; --on-fill: #0b1220; color-scheme: dark; }
 }
+:root[data-theme="dark"] { --bg: #12151a; --panel: #1a1f26; --ink: #e8ebef; --muted: #9aa4b1; --line: #2c333d; --accent: #5b9bff; --accent-ink: #0b1220;
+    --ok: #6fd39b; --ok-bg: #173325; --warn: #f0c060; --warn-bg: #3a2e12; --bad: #ff8a8a; --bad-bg: #3b1a1a; --info: #9cc0ff; --info-bg: #1a2a45; --on-fill: #0b1220; color-scheme: dark; }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); }
 a { color: var(--accent); text-decoration: none; }
@@ -61,12 +63,16 @@ button:disabled { opacity: 0.5; cursor: default; }
 .stepper b { width: 24px; height: 24px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; border: 2px solid var(--line); font-size: 12px; }
 .stepper .on { color: var(--ink); }
 .stepper .on b { border-color: var(--info); color: var(--info); }
-.stepper .done b { background: var(--ok); border-color: var(--ok); color: #fff; }
+.stepper .done b { background: var(--ok); border-color: var(--ok); color: var(--on-fill); }
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
 .seg button { border: 0; border-radius: 0; border-right: 1px solid var(--line); }
 .seg button:last-child { border-right: 0; }
-.seg button.on { background: var(--info); color: #fff; }
+.seg button.on { background: var(--info); color: var(--on-fill); }
 .bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--line); margin: 6px 0; }
 .bar span { display: block; height: 100%; }
 .bar.tall { height: 18px; }
-.bar.tall span { color: #fff; font-size: 11px; font-weight: 700; text-align: center; line-height: 18px; overflow: hidden; }
+.bar.tall span { color: var(--on-fill); font-size: 11px; font-weight: 700; text-align: center; line-height: 18px; overflow: hidden; }
+
+.theme { margin: 20px 8px 0; display: flex; }
+.theme button { flex: 1; padding: 4px 6px; font-size: 12px; }
+@media print { :root { color-scheme: light; } }

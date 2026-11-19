@@ -13,6 +13,22 @@ import Vendors from './pages/Vendors';
 import Proposals from './pages/Proposals';
 import ProposalBuilder from './pages/ProposalBuilder';
 
+type Theme = 'system' | 'light' | 'dark';
+const readTheme = (): Theme => { try { return (localStorage.getItem('theme') as Theme) || 'system'; } catch { return 'system'; } };
+const applyTheme = (t: Theme) => { if (t === 'system') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t; };
+applyTheme(readTheme());
+
+/** Light / dark / follow the computer's setting; remembered in this browser. */
+function ThemeSwitch() {
+  const [theme, setTheme] = React.useState<Theme>(readTheme);
+  const pick = (t: Theme) => { setTheme(t); applyTheme(t); try { localStorage.setItem('theme', t); } catch { /* private window */ } };
+  return (
+    <div className="seg theme noprint" role="group" aria-label="Theme">
+      {(['light', 'system', 'dark'] as Theme[]).map((t) => <button key={t} className={theme === t ? 'on' : ''} onClick={() => pick(t)}>{t === 'light' ? 'Light' : t === 'dark' ? 'Dark' : 'Auto'}</button>)}
+    </div>
+  );
+}
+
 function App() {
   return (
     <BrowserRouter>
@@ -24,6 +40,7 @@ function App() {
           <NavLink to="/calculator">Paycheck calculator</NavLink>
           <NavLink to="/research">Tax database</NavLink>
           <NavLink to="/vendors">Vendor profiles</NavLink>
+          <ThemeSwitch />
         </nav>
         <main>
           <Routes>
