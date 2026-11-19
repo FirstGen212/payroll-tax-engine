@@ -20,6 +20,19 @@ app.setErrorHandler((err, _req, reply) => {
   reply.code(status).send({ error: err.message, issues: (err as any).issues });
 });
 
+// Optional sign-in: when APP_PASSWORD is set (as on Render), every page and API call needs it (browser login prompt).
+const appUser = process.env.APP_USER ?? 'firstgen';
+const appPassword = process.env.APP_PASSWORD;
+if (appPassword) {
+  const expected = 'Basic ' + Buffer.from(`${appUser}:${appPassword}`).toString('base64');
+  app.addHook('onRequest', async (req, reply) => {
+    if (req.url === '/api/health') return;
+    if (req.headers.authorization !== expected) {
+      reply.header('WWW-Authenticate', 'Basic realm="Payroll Tax Engine", charset="UTF-8"').code(401).send({ error: 'Sign in required' });
+    }
+  });
+}
+
 const iso = (d: unknown) => (d instanceof Date ? d.toISOString().slice(0, 10) : (d as string | null) ?? undefined);
 
 // ------------------------------------------------------------------ reference / research database
