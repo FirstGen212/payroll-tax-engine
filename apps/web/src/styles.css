@@ -1,0 +1,50 @@
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --ink: #1b1f24; --muted: #5d6673; --line: #e2e5ea; --accent: #1f5fbf; --accent-ink: #fff;
+  --ok: #1d7a46; --ok-bg: #e5f4ea; --warn: #8a5a00; --warn-bg: #fdf1d8; --bad: #a12828; --bad-bg: #fbe5e5; --info: #2b5797; --info-bg: #e5edf9;
+  --radius: 8px; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color: var(--ink); background: var(--bg);
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #12151a; --panel: #1a1f26; --ink: #e8ebef; --muted: #9aa4b1; --line: #2c333d; --accent: #5b9bff; --accent-ink: #0b1220;
+    --ok: #6fd39b; --ok-bg: #173325; --warn: #f0c060; --warn-bg: #3a2e12; --bad: #ff8a8a; --bad-bg: #3b1a1a; --info: #9cc0ff; --info-bg: #1a2a45; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); }
+a { color: var(--accent); text-decoration: none; }
+.layout { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+nav.side { background: var(--panel); border-right: 1px solid var(--line); padding: 16px 12px; }
+nav.side h1 { font-size: 15px; margin: 0 8px 16px; }
+nav.side a { display: block; padding: 8px 10px; border-radius: 6px; color: var(--ink); font-size: 14px; }
+nav.side a.active { background: var(--info-bg); color: var(--info); font-weight: 600; }
+main { padding: 24px 28px; max-width: 1400px; }
+h2 { margin: 0 0 16px; font-size: 22px; } h3 { margin: 20px 0 10px; font-size: 16px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; margin-bottom: 16px; }
+.row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); min-width: 120px; }
+input, select, textarea { font: inherit; font-size: 14px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); }
+input[type=checkbox] { width: auto; }
+.check { flex-direction: row; align-items: center; gap: 6px; color: var(--ink); font-size: 14px; }
+button { font: inherit; font-size: 14px; padding: 7px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+button.small { padding: 3px 8px; font-size: 12px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.badge { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+.b-published, .b-draft, .b-confirmed { background: var(--ok-bg); color: var(--ok); }
+.b-unverified, .b-assumed { background: var(--warn-bg); color: var(--warn); }
+.b-projected, .b-learned { background: var(--info-bg); color: var(--info); }
+.b-placeholder { background: var(--bad-bg); color: var(--bad); }
+.muted { color: var(--muted); } .small { font-size: 12px; }
+.warn { background: var(--warn-bg); color: var(--warn); padding: 8px 12px; border-radius: 6px; font-size: 13px; margin: 6px 0; }
+.err { background: var(--bad-bg); color: var(--bad); padding: 8px 12px; border-radius: 6px; font-size: 13px; }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
+.tabs button { border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none; }
+.tabs button.on { border-bottom-color: var(--accent); color: var(--accent); font-weight: 600; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.kpi { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; }
+.kpi .v { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; } .kpi .l { font-size: 12px; color: var(--muted); }
+details summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+pre.audit { white-space: pre-wrap; font-size: 12px; background: var(--bg); padding: 8px; border-radius: 6px; }
+@media (max-width: 800px) { .layout { grid-template-columns: 1fr; } nav.side { display: flex; flex-wrap: wrap; } main { padding: 16px; } }

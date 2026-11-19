@@ -1,0 +1,23 @@
+{
+  "name": "payroll-tax-engine",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Multi-state, multi-employer US payroll tax research database, calculation engine and app (First Gen).",
+  "workspaces": ["packages/*", "apps/*"],
+  "scripts": {
+    "build": "npm run build -w packages/tax-data -w packages/engine",
+    "test": "vitest run",
+    "typecheck": "tsc -b packages/engine packages/tax-data apps/api && tsc -p apps/web --noEmit",
+    "db:migrate": "npm run migrate -w apps/api",
+    "db:seed": "npm run seed -w apps/api",
+    "dev:api": "npm run dev -w apps/api",
+    "dev:web": "npm run dev -w apps/web",
+    "coverage:report": "tsx scripts/coverage-report.ts"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4",
+    "tsx": "^4.19.2",
+    "@types/node": "^22.9.0"
+  }
+}

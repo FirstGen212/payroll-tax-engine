@@ -1,0 +1,25 @@
+{
+  "name": "@pte/api",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "migrate": "tsx src/migrate.ts",
+    "seed": "tsx src/seed.ts",
+    "seed:demo": "tsx src/seed-demo.ts",
+    "import:pa-psd": "tsx src/importers/pa-psd.ts",
+    "import:oh-muni": "tsx src/importers/oh-muni.ts"
+  },
+  "dependencies": {
+    "@pte/engine": "0.1.0",
+    "@pte/tax-data": "0.1.0",
+    "fastify": "^4.28.1",
+    "@fastify/cors": "^9.0.1",
+    "@fastify/static": "^7.0.4",
+    "pg": "^8.13.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": { "@types/pg": "^8.11.10" }
+}

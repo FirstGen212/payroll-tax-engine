@@ -1,0 +1,62 @@
+# Payroll Tax Engine
+
+A US payroll tax research database, calculation engine and web app for running **actual, mock and proposal (eligibility) payrolls** across multiple employer clients. Built for First Gen to model what ADP, Viventium, Empeon, Paychex, Paycor and Paylocity calculate, and eventually to calculate *like* each of them.
+
+TypeScript + PostgreSQL. Tax year 2027 is primary; every rule is effective-dated so 2025, 2026 and 2027 coexist.
+
+## What's in it
+
+| Area | What it does |
+|---|---|
+| **Tax database** (`packages/tax-data`) | Federal, all 50 states, DC, and 5 territories (PR, GU, VI, AS, MP) plus a starter set of local jurisdictions. Every rule carries an effective date range, a **verification status** and **source citations**. |
+| **Engine** (`packages/engine`) | Pub 15-T percentage method (2020+ and pre-2020 W-4s, Step 2, NRA), supplemental flat/aggregate with the $1M rule, FICA/Additional Medicare/FUTA with credit reduction, state formulas, multi-state (reciprocity, resident credit, wage allocation, convenience of employer), locals (PA Act 32 + LST, Philadelphia, Ohio cities + school districts with resident credit, NYC, Yonkers, MD counties, IN counties, MI/KY/MO/AL, CO OPT, OR transit), SUI/SDI/PFL/PFML/WA Cares, territories, pre/post-tax deductions with IRS limits and catch-ups, public pension pick-ups (Texas TRS etc.), garnishments with CCPA limits, and a full audit trail on every line. |
+| **Vendor profiles** | ADP, Paychex, Viventium, Empeon, Paycor, Paylocity profiles capture calculation conventions (rounding, supplemental method, FICA true-up, deduction base...). The **learner** searches those conventions against sample paychecks to work out how a provider calculates. |
+| **API** (`apps/api`) | Fastify + Postgres. Clients, work locations, tax toggles and SUI rates, employees with federal and state W-4s, recurring deductions, pay runs, YTD, scenario comparisons, vendor learning, rule editing with history. |
+| **Web app** (`apps/web`) | Clients, employee setup, pay run screen, tax setup and toggles, tax research database with status/coverage, paycheck calculator with Section 125 savings comparison, vendor profiles. |
+
+## Verification status (read this before using numbers for live payroll)
+
+Every tax line in every paycheck shows the status of the rule that produced it:
+
+- **published**: matches a final agency publication we cited.
+- **draft**: matches an agency draft (federal 2027 FIT uses the IRS early-release draft Pub 15-T from Nov 9 2026 plus Rev. Proc. 2026-35).
+- **projected**: the agency has not published that year yet; values are carried forward or projected from a statutory schedule.
+- **unverified**: entered from research; must be checked against the cited agency source.
+- **placeholder**: structure only (American Samoa income tax).
+
+Current totals are in [docs/COVERAGE.md](docs/COVERAGE.md). In short: federal figures for 2027 are sourced from IRS/SSA; most state and local values are **unverified** and the next phase is to verify them state by state against each agency's withholding guide. The app warns on every check that uses unverified data.
+
+## Run it
+
+```bash
+docker compose up -d db            # or any Postgres 14+; set DATABASE_URL
+npm install
+npm run db:seed                    # creates schema and loads the tax database
+npm run seed:demo -w apps/api      # optional: three fictional demo clients
+npm run dev:api                    # http://localhost:4000
+npm run dev:web                    # http://localhost:5173
+npm test                           # engine audit tests
+```
+
+`npm run build -w apps/web` then `npm start -w apps/api` serves the built UI from the API on one port.
+
+## Loading the full local jurisdiction lists
+
+The starter set covers the major local systems. The complete lists come from agency files, loaded with importers that mark rows `published` and cite the file:
+
+```bash
+npm run import:pa-psd -w apps/api -- ./PSD_codes.csv 2027-01-01     # PA DCED: ~2,500 PSDs with resident/NR EIT and LST
+npm run import:oh-muni -w apps/api -- ./ohio_municipal.csv 2027-01-01 # Ohio municipal rates, credit % and credit limit
+```
+
+## Repository layout
+
+```
+packages/tax-data   types, sources, federal/state/territory/local data, benefits, reciprocity, vendor profiles
+packages/engine     calculation engine, pay runs, scenario comparison, vendor learner, tests
+apps/api            Postgres schema (migrations), seed, importers, REST API
+apps/web            React UI
+docs                coverage report, roadmap, architecture notes
+```
+
+See [docs/ROADMAP.md](docs/ROADMAP.md) for the phased plan and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how a paycheck is calculated.

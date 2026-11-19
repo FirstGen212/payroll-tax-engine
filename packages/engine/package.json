@@ -1,0 +1,8 @@
+{
+  "name": "@pte/engine",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "dependencies": { "decimal.js": "^10.4.3", "@pte/tax-data": "0.1.0" }
+}
