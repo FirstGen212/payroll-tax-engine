@@ -11,8 +11,9 @@ import type { PayInput, PayResult } from '@pte/engine';
 import { pool, q, tx } from './db.js';
 import { getTaxDb, invalidateTaxDb } from './taxdb.js';
 import { seed } from './seed.js';
+import { proposalRoutes } from './proposals/routes.js';
 
-const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' } });
+const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' }, bodyLimit: 40 * 1024 * 1024 });
 await app.register(cors, { origin: true });
 app.setErrorHandler((err, _req, reply) => {
   const status = (err as any).issues ? 400 : (err as any).statusCode ?? 500;
@@ -212,6 +213,8 @@ async function buildInput(clientId: string, employeeId: string, line: { earnings
 }
 
 /** Stateless calculator: post a full PayInput, get the full result with audit trail. */
+await proposalRoutes(app);
+
 app.post('/api/calculate', async (req) => calculatePay(req.body as PayInput, await getTaxDb()));
 
 const PayRunBody = z.object({

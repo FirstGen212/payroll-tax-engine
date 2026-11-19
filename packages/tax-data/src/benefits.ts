@@ -81,6 +81,8 @@ export const DEDUCTION_TYPES: DeductionType[] = [
   d('HOSP_IND_125', 'Hospital indemnity (pre-tax)', 'section125_health', S125, 13, { notes: 'Fixed-indemnity benefits paid without regard to expenses may be taxable when received if premiums were pre-tax.' }),
   d('ACC_125', 'Accident (pre-tax)', 'section125_health', S125, 14),
   d('CI_125', 'Critical illness (pre-tax)', 'section125_health', S125, 15),
+  d('OTHER_125', 'Other pre-tax (Section 125)', 'section125_health', S125, 17, { stateOverrides: { PA: { LOCAL: false } } }),
+  d('PROPOSED_125', 'Proposed pre-tax benefit (Section 125, proposal tool)', 'section125_health', S125, 18, { stateOverrides: { PA: { LOCAL: false } }, notes: 'The new pre-tax deduction modeled by the proposal tool. Treated like a Section 125 health premium: exempt from FIT, FICA, FUTA, and most state/SUI wages; PA local EIT still applies.' }),
   d('GTL_PRETAX_EE', 'Employee-paid group term life (≤$50k, pre-tax)', 'section125_health', S125, 16),
   d('HSA_125', 'HSA (through cafeteria plan)', 'hsa', S125, 20, { limitKey: 'hsa', catchUpLimitKey: 'hsa_catchup', stateOverrides: { CA: { SIT: false, SDI: false }, NJ: { SIT: false }, PA: { LOCAL: false } }, w2: '12-W' }),
   d('FSA_HEALTH', 'Health FSA', 'fsa', S125, 21, { limitKey: 'fsa_health' }),

@@ -48,3 +48,9 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 details summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 pre.audit { white-space: pre-wrap; font-size: 12px; background: var(--bg); padding: 8px; border-radius: 6px; }
 @media (max-width: 800px) { .layout { grid-template-columns: 1fr; } nav.side { display: flex; flex-wrap: wrap; } main { padding: 16px; } }
+button:disabled { opacity: 0.5; cursor: default; }
+@media print {
+  nav.side, .noprint, main > *:not(.printable):not(:has(.printable)) { display: none !important; }
+  .layout { display: block; } main { padding: 0; }
+  .panel.printable { border: none; }
+}
