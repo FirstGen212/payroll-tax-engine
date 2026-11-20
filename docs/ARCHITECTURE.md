@@ -31,7 +31,14 @@
 
 A saved `proposal` keeps the uploaded rows, the column mapping, the settings (including per-row reviewer overrides and the participation rate) and the results. Every save or recalculation adds a `proposal_revision` with the settings and headline numbers.
 
-Publishing writes a `proposal_report` row: a slug (`<company>-<16 hex>`) and a **snapshot** built by `buildSnapshot` in `apps/api/src/proposals/report.ts` from the saved numbers and the proposal's page settings. `GET /api/public/reports/:slug` returns only that snapshot, so later edits never change a link that was sent, and nothing but what the page shows leaves the app. Revoking sets `revoked_at`; the link then answers 404.
+Each employee result carries a `cause` (the first rule that failed, in the order the rules run) and an `explanation`: the client wording for it, built by `explainEmployee` in `packages/engine/src/proposal.ts`. The explanation has a status (Eligible, Eligible (part-time plan), Under review, Not eligible), a headline, a reason and suggestions.
+
+- "Savings too low" says how many cents of tax each dollar set aside saves against what the plan needs, then names what keeps the federal income tax low. It finds that by re-running the same check with one thing changed: no W-4 credits or allowances, the Single rate, no other pre-tax deductions.
+- Suggestions come from a search for the smallest pay per check at which the pay and savings rules pass, turned into hours at the current hourly rate when that is realistic. They only ever name pay, hours or missing data. **A W-4 is given as a reason, never as something to change**: changing it moves withholding, not the tax owed, and it is the employee's own choice.
+- What-ifs use the first check of the year (`approxAllotment`), which matches the full-year figure below the wage bases. If one cannot be calculated, the reason is kept without a suggestion and the row is flagged.
+- Reviewer notes and internal flags never go into an explanation. Results saved before explanations existed fall back to the status and the rule's own sentence (`explanationOf` in `apps/api/src/proposals/report.ts`) until the proposal is recalculated.
+
+Publishing writes a `proposal_report` row: a slug (`<company>-<16 hex>`) and a **snapshot** built by `buildSnapshot` in `apps/api/src/proposals/report.ts` from the saved numbers and the proposal's page settings. `GET /api/public/reports/:slug` returns only that snapshot, so later edits never change a link that was sent, and nothing but what the page shows leaves the app. Revoking sets `revoked_at`; the link then answers 404. Links do not expire on their own. The snapshot lists every employee except rows the reviewer left out, which are also taken out of its headcount; amounts are included only for people on a plan.
 
 ## Vendor learning
 

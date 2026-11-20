@@ -260,6 +260,24 @@ export interface PlanCalc {
   };
 }
 
+/** Which rule decided an employee's status (the first one that failed, in the order the rules run). */
+export type EligibilityCause =
+  | 'excluded' | 'reviewer' | 'no-pay' | 'pay-schedule' | 'work-state' | 'state-not-covered' | 'funds' | 'savings'
+  | 'low-income' | 'no-federal-tax' | 'high-savings' | 'hours-missing' | 'hours' | 'confidence';
+
+/** An employee's result in words a client can read: where they stand, why, and what would change it. */
+export interface EmployeeExplanation {
+  /** Short status: Eligible, Eligible (part-time plan), Under review, Not eligible. */
+  status: string;
+  tone: 'eligible' | 'partTime' | 'review' | 'notEligible';
+  /** A few words naming the deciding rule, e.g. "Savings too low". Empty for eligible employees. */
+  headline: string;
+  /** Why, in one to three sentences. */
+  reason: string;
+  /** What would have to change for them to qualify (empty when nothing would, or nothing needs to). */
+  suggestions: string[];
+}
+
 export interface ProposalEmployeeResult extends Partial<PlanCalc> {
   key: string;
   row: CensusRow;
@@ -277,6 +295,10 @@ export interface ProposalEmployeeResult extends Partial<PlanCalc> {
   partTime?: { triggers: string[]; deductionPerCheck: number; allotment: number; savingsDelta: number; eligible: boolean; calc: PlanCalc };
   reasons: string[];
   flags: string[];
+  /** The rule that decided the standard-plan result (kept when the part-time plan or a reviewer changes the status). */
+  cause?: EligibilityCause;
+  /** The result in plain words for the client page and exports. */
+  explanation?: EmployeeExplanation;
   /** The reviewer override applied to this row, if any. */
   override?: EmployeeOverride;
 }
@@ -532,7 +554,23 @@ function unverifiedLines(input: PayInput, s: ProposalSettings, db: TaxDatabase):
   return [...new Set(r.taxes.filter((t) => t.status !== 'published' && t.status !== 'draft').map((t) => `${t.jurisdiction} ${t.kind} (${t.status})`))];
 }
 
+/** What the explanation needs to re-run an employee with different pay or W-4 details. */
+interface EvalContext { freq: PayFrequency; gross: number; otherComp: number; dedPerCheck: number; existing: number; date: string }
+const CONTEXT = new WeakMap<ProposalEmployeeResult, EvalContext>();
+
 export function evaluateEmployee(row: CensusRow, s: ProposalSettings, db: TaxDatabase): ProposalEmployeeResult {
+  const res = evaluateRules(row, s, db);
+  try {
+    res.explanation = explainEmployee(res, s, db, CONTEXT.get(res));
+  } catch {
+    // A what-if that cannot be calculated must not take the proposal down: fall back to the reason without one.
+    res.explanation = explainEmployee(res, s, db, undefined);
+    res.flags.push('The "what would change it" estimate could not be calculated for this row.');
+  }
+  return res;
+}
+
+function evaluateRules(row: CensusRow, s: ProposalSettings, db: TaxDatabase): ProposalEmployeeResult {
   const name = [row.firstName, row.lastName].filter(Boolean).join(' ') || row.employeeId || `Row ${row.rowNumber ?? '?'}`;
   const res: ProposalEmployeeResult = {
     key: `${row.company ?? ''}|${row.employeeId ?? ''}|${row.rowNumber ?? ''}`,
@@ -543,23 +581,24 @@ export function evaluateEmployee(row: CensusRow, s: ProposalSettings, db: TaxDat
     reasons: [],
     flags: [],
   };
-  const fail = (e: Eligibility, why: string) => {
+  const fail = (e: Eligibility, why: string, cause: EligibilityCause) => {
     res.eligibility = e;
+    res.cause = cause;
     res.reasons.push(why);
     return res;
   };
   const ov = s.overrides?.[res.key];
   if (ov && Object.keys(ov).length) res.override = ov;
-  if (ov?.exclude) return fail('Excluded', `Left out by the reviewer${ov.note ? `: ${ov.note}` : '.'}`);
+  if (ov?.exclude) return fail('Excluded', `Left out by the reviewer${ov.note ? `: ${ov.note}` : '.'}`, 'excluded');
 
   // 1. Data needed to calculate at all
   const freq = parseFrequency(row.payFrequency, row.periodsPerYear);
   let gross = Number(row.grossPay ?? 0);
-  if (!(gross > 0)) return fail('Not Eligible - No Gross Compensation', 'No gross pay in the data.');
-  if (!freq) return fail('NEEDS REVIEW', `Pay frequency "${row.payFrequency ?? ''}" not recognized.`);
-  if (!row.workState || !/^[A-Za-z]{2}$/.test(row.workState.trim())) return fail('NEEDS REVIEW', 'Work state missing or not a 2-letter code.');
+  if (!(gross > 0)) return fail('Not Eligible - No Gross Compensation', 'No gross pay in the data.', 'no-pay');
+  if (!freq) return fail('NEEDS REVIEW', `Pay frequency "${row.payFrequency ?? ''}" not recognized.`, 'pay-schedule');
+  if (!row.workState || !/^[A-Za-z]{2}$/.test(row.workState.trim())) return fail('NEEDS REVIEW', 'Work state missing or not a 2-letter code.', 'work-state');
   row.workState = row.workState.trim().toUpperCase();
-  if (!db.jurisdictions.some((j) => j.code === row.workState)) return fail('NEEDS REVIEW', `Work state ${row.workState} is not in the tax database.`);
+  if (!db.jurisdictions.some((j) => j.code === row.workState)) return fail('NEEDS REVIEW', `Work state ${row.workState} is not in the tax database.`, 'state-not-covered');
   if (!parseFederalStatus(row.federalFilingStatus)) res.flags.push(`Federal filing status "${row.federalFilingStatus ?? ''}" not recognized; Single assumed.`);
 
   const periods = PERIODS_PER_YEAR[freq];
@@ -600,11 +639,12 @@ export function evaluateEmployee(row: CensusRow, s: ProposalSettings, db: TaxDat
   res.flags.push(...notes);
   const existing = (input.deductions ?? []).reduce((a, d) => a + (d.amount ?? (d.percent ?? 0) * gross), 0);
   const noFed = row.federalTaxPaid === false;
+  CONTEXT.set(res, { freq, gross, otherComp, dedPerCheck, existing: r2(existing), date: checkDatesFor(s.year, freq)[0] });
 
   if (dedPerCheck + existing > gross + otherComp) {
     res.deductionPerCheck = dedPerCheck;
     res.perPeriod = { gross: gross + otherComp, firstGen: dedPerCheck, deductions: r2(existing), net: r2(gross + otherComp - existing - dedPerCheck), taxBefore: 0, taxAfter: 0, stateTaxBefore: 0, effectiveRate: 0 };
-    fail('Not Eligible - Insufficient Funds', `Deduction ${usd(dedPerCheck)} plus existing deductions exceed gross pay per check (${usd(gross + otherComp)}).`);
+    fail('Not Eligible - Insufficient Funds', `Deduction ${usd(dedPerCheck)} plus existing deductions exceed gross pay per check (${usd(gross + otherComp)}).`, 'funds');
     return applyStatusOverride(tryPartTime(res, input, freq, gross, s, db), input, freq, gross, s, db);
   }
   Object.assign(res, planCalc(input, freq, gross, dedPerCheck, s, db));
@@ -621,19 +661,19 @@ export function evaluateEmployee(row: CensusRow, s: ProposalSettings, db: TaxDat
 
   // 3. Eligibility, in the order the current tool applies it
   if (m.allotment < s.allotmentThreshold) {
-    fail(noFed ? 'Not Eligible - Insufficient Savings + No Federal Taxes Paid' : 'Not Eligible - Insufficient Savings', `Monthly allotment ${usd(m.allotment)} is below the ${usd(s.allotmentThreshold)} threshold.`);
+    fail(noFed ? 'Not Eligible - Insufficient Savings + No Federal Taxes Paid' : 'Not Eligible - Insufficient Savings', `Monthly allotment ${usd(m.allotment)} is below the ${usd(s.allotmentThreshold)} threshold.`, 'savings');
   } else if (annualGross <= s.lowIncomeMax) {
-    fail('Not Eligible - Low Income', `Annual gross ${usd(annualGross)} is at or below ${usd(s.lowIncomeMax)}.`);
+    fail('Not Eligible - Low Income', `Annual gross ${usd(annualGross)} is at or below ${usd(s.lowIncomeMax)}.`, 'low-income');
   } else if (noFed && s.noFederalTaxAs === 'status') {
-    fail('No Federal Taxes Paid', 'No federal income tax is withheld today according to the file; review before enrolling.');
+    fail('No Federal Taxes Paid', 'No federal income tax is withheld today according to the file; review before enrolling.', 'no-federal-tax');
   } else if (m.allotment >= s.needsReviewAllotment) {
-    fail('NEEDS REVIEW', `Monthly allotment ${usd(m.allotment)} is at or above the ${usd(s.needsReviewAllotment)} review threshold.`);
+    fail('NEEDS REVIEW', `Monthly allotment ${usd(m.allotment)} is at or above the ${usd(s.needsReviewAllotment)} review threshold.`, 'high-savings');
   } else if (hoursPerPeriod === undefined) {
-    fail('NEEDS REVIEW', 'Hours missing for an hourly employee.');
+    fail('NEEDS REVIEW', 'Hours missing for an hourly employee.', 'hours-missing');
   } else if (hoursPerPeriod < s.minHoursPerPeriod) {
-    fail('Not Eligible - Insufficient Hours', `${res.hoursPerPeriod} hours per pay period is below the ${s.minHoursPerPeriod}-hour minimum.`);
+    fail('Not Eligible - Insufficient Hours', `${res.hoursPerPeriod} hours per pay period is below the ${s.minHoursPerPeriod}-hour minimum.`, 'hours');
   } else if (s.reviewMinConfidence > 0 && row.confidence !== undefined && row.confidence < s.reviewMinConfidence) {
-    fail('NEEDS REVIEW', `Data confidence ${row.confidence} is below ${s.reviewMinConfidence}.`);
+    fail('NEEDS REVIEW', `Data confidence ${row.confidence} is below ${s.reviewMinConfidence}.`, 'confidence');
   } else {
     res.eligibility = 'Eligible';
   }
@@ -690,6 +730,160 @@ function tryPartTime(res: ProposalEmployeeResult, input: PayInput, freq: PayFreq
     res.reasons.push(`Qualifies for the part-time plan: ${usd(pt.deductionPerCheck)} per check, allotment ${usd(calc.monthly.allotment)}/month (minimum ${usd(pt.allotmentThreshold)}).`);
   }
   return res;
+}
+
+// ---------------------------------------------------------------- results in plain words
+
+const usd0 = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+const hrs = (n: number) => `${n} hour${n === 1 ? '' : 's'}`;
+const FILING_LABEL: Record<string, string> = { mfj: 'Married filing jointly', hoh: 'Head of household' };
+
+/**
+ * Estimated monthly allotment with different pay or W-4 details. Uses the first check of the year, so it is
+ * quick enough to search with; wage bases are not in play at these pay levels.
+ */
+function approxAllotment(row: CensusRow, gross: number, c: EvalContext, s: ProposalSettings, db: TaxDatabase, ded = c.dedPerCheck): number {
+  const { input } = payInputFromRow(row, c.freq, gross, s, c.otherComp);
+  const existing = (input.deductions ?? []).reduce((a, d) => a + (d.amount ?? (d.percent ?? 0) * gross), 0);
+  if (ded + existing > gross + c.otherComp) return 0;
+  const before = runSeries(input, [c.date], db)[0];
+  const after = runSeries({ ...input, deductions: [...(input.deductions ?? []), { code: PROPOSAL_DEDUCTION_CODE, amount: ded }] }, [c.date], db)[0];
+  return r2((((before.employeeTaxes - after.employeeTaxes) * PERIODS_PER_YEAR[c.freq]) / 12) * s.allotmentBuffer);
+}
+
+/** Smallest pay per check at which the pay and savings rules pass, keeping the W-4 and deductions as they are. */
+function payToQualify(res: ProposalEmployeeResult, c: EvalContext, s: ProposalSettings, db: TaxDatabase): number | undefined {
+  const periods = PERIODS_PER_YEAR[c.freq];
+  const ok = (g: number) => (g + c.otherComp) * periods > s.lowIncomeMax && approxAllotment(res.row, g, c, s, db) >= s.allotmentThreshold;
+  if (ok(c.gross)) return c.gross;
+  let lo = c.gross;
+  let hi = Math.max(c.gross * 3, (s.lowIncomeMax / periods) * 1.5, (c.dedPerCheck + c.existing) * 2);
+  if (!ok(hi)) return undefined;
+  for (let i = 0; i < 16 && hi - lo > 1; i++) {
+    const mid = (lo + hi) / 2;
+    if (ok(mid)) hi = mid;
+    else lo = mid;
+  }
+  return Math.ceil(hi);
+}
+
+/** What would have to change for the employee to qualify: more pay, more hours, or both. */
+function waysToQualify(res: ProposalEmployeeResult, c: EvalContext, s: ProposalSettings, db: TaxDatabase, goal = ''): string[] {
+  const hours = res.hoursPerPeriod;
+  const hoursShort = hours !== undefined && hours < s.minHoursPerPeriod;
+  const hourly = !/salar/i.test(res.row.employmentType ?? '');
+  const rate = !hourly ? undefined : res.row.hourlyRate && res.row.hourlyRate > 0 ? res.row.hourlyRate : hours && hours > 0 ? c.gross / hours : undefined;
+  const pay = payToQualify(res, c, s, db);
+  if (pay === undefined) return [`More pay alone would not change this: even at about three times their current pay, the savings stay under what the plan needs with their current W-4.`];
+  const alsoHours = hoursShort ? ` They would also need to average at least ${s.minHoursPerPeriod} hours per pay period.` : '';
+  if (pay > c.gross) {
+    const line = `Would qualify${goal} at about ${usd0(pay)} per check, ${usd0(pay - c.gross)} more than today.`;
+    const needHours = rate ? Math.max(Math.ceil(pay / rate), hoursShort ? s.minHoursPerPeriod : 0) : undefined;
+    if (rate && needHours !== undefined && hours !== undefined && needHours > hours && needHours / WEEKS_PER_PERIOD[c.freq] <= 60) {
+      return [`${line} At their current ${usd(rate)} an hour that is about ${needHours} hours per pay period, ${Math.ceil(needHours - hours)} more than today.`];
+    }
+    return [line + alsoHours];
+  }
+  if (hoursShort) return [`Would qualify${goal} at ${s.minHoursPerPeriod} or more hours per pay period, about ${Math.ceil(s.minHoursPerPeriod - hours!)} more than today.`];
+  return [];
+}
+
+/**
+ * Why the savings fall short. Says how much tax each dollar set aside saves against what the plan needs,
+ * then names what keeps the federal income tax on this pay low: the W-4, other deductions, or the pay itself.
+ */
+function savingsReason(res: ProposalEmployeeResult, c: EvalContext, s: ProposalSettings, db: TaxDatabase): string {
+  const row = res.row;
+  const T = s.allotmentThreshold;
+  const head = `Their estimated savings are ${usd(res.monthly!.allotment)} a month, and the plan needs ${usd(T)}.`;
+  const would = (r: CensusRow, ded?: number) => approxAllotment(r, c.gross, c, s, db, ded) >= T;
+  if (c.dedPerCheck < s.deductionPerCheck && would(row, s.deductionPerCheck)) {
+    return `${head} The ${usd(c.dedPerCheck)} deduction set for them is smaller than the standard ${usd(s.deductionPerCheck)}, so there is less tax to save.`;
+  }
+  const before = res.check!.before;
+  const after = res.check!.after;
+  const saved = Math.round(((before.employeeTaxes - after.employeeTaxes) / c.dedPerCheck) * 100);
+  const need = Math.max(Math.ceil(((T * 12) / (PERIODS_PER_YEAR[c.freq] * s.allotmentBuffer * c.dedPerCheck)) * 100), saved + 1);
+  const rate = `Each dollar set aside saves them about ${saved} cents in tax, and the plan needs about ${need} cents.`;
+
+  const state = db.jurisdictions.find((j) => j.code === row.workState)?.name ?? row.workState;
+  const hasSit = db.rules.some((r) => r.jurisdiction === row.workState && r.kind === 'SIT' && r.calc.kind !== 'none');
+  const noSit = hasSit ? '' : ` ${state} has no state income tax, so nothing is saved there either.`;
+
+  if (row.federalTaxPaid === false) {
+    return `${head} ${rate} The payroll file shows no federal income tax withheld for them today, so the plan can mostly reduce only Social Security and Medicare tax.${noSit}`;
+  }
+  const st = parseFederalStatus(row.federalFilingStatus) ?? 'single';
+  const credits = row.dependentCredits && row.dependentCredits > 0 ? row.dependentCredits : 0;
+  const allowances = !credits && row.dependentAllowances && row.dependentAllowances > 0 ? row.dependentAllowances : 0;
+  const claims = credits ? `${usd0(credits)} a year in dependent credits` : `${allowances} withholding allowance${allowances === 1 ? '' : 's'}`;
+  const plain: CensusRow = { ...row, dependentCredits: undefined, dependentAllowances: undefined };
+  const noPretax: CensusRow = { ...row, healthMonthly: undefined, otherPretaxMonthly: undefined, retirementMonthly: undefined, retirementPercent: undefined };
+  let why = '';
+  if ((credits || allowances) && would(plain)) why = `their W-4 claims ${claims}`;
+  else if (FILING_LABEL[st] && would({ ...row, federalFilingStatus: 'Single' })) why = `their W-4 uses the ${FILING_LABEL[st]} rate, which withholds less than the Single rate at this pay`;
+  else if (FILING_LABEL[st] && (credits || allowances) && would({ ...plain, federalFilingStatus: 'Single' })) why = `their W-4 uses the ${FILING_LABEL[st]} rate and claims ${claims}`;
+  else if (c.existing > 0 && would(noPretax)) why = `they already have ${usd(c.existing)} per check in other deductions, which lowers the pay that is taxed`;
+
+  let fed: string;
+  if (before.fit <= 0) fed = `No federal income tax is withheld from their check today, because ${why || 'their pay is under the level where federal income tax starts'}. That leaves only Social Security and Medicare tax for the plan to reduce.`;
+  else if (after.fit <= 0) fed = `Only ${usd(before.fit)} of federal income tax is withheld from each check, because ${why || 'their pay is close to the level where federal income tax starts'}, so there is little for the plan to reduce.`;
+  else fed = `Federal income tax is withheld from their check at a low rate, because ${why || 'of the tax bracket their pay falls in'}.`;
+  return `${head} ${rate} ${fed}${noSit}`;
+}
+
+/** Hours that do not fit the pay (a handful of hours for a full check) usually mean the file is wrong, not the employee. */
+function oddHours(res: ProposalEmployeeResult, c: EvalContext): string[] {
+  const h = res.hoursPerPeriod;
+  if (h === undefined || h <= 0 || h >= 8 || c.gross / h < 150) return [];
+  return [`The file shows only ${hrs(h)} for ${usd(c.gross)} of pay. If that is not right, send their actual hours and we will re-run their numbers.`];
+}
+
+/** The result in words a client can read. Reviewer notes and internal flags stay out of it. */
+function explainEmployee(res: ProposalEmployeeResult, s: ProposalSettings, db: TaxDatabase, c?: EvalContext): EmployeeExplanation {
+  const make = (tone: EmployeeExplanation['tone'], status: string, headline: string, reason: string, suggestions: string[] = []): EmployeeExplanation => ({ status, tone, headline, reason, suggestions });
+  const e = res.eligibility;
+  const pt = res.partTime;
+  const planRule = res.cause === 'savings' || res.cause === 'low-income' || res.cause === 'hours' || res.cause === 'funds';
+  if (e === 'Excluded') return make('notEligible', 'Left out', '', 'Left out of this proposal by the reviewer.');
+  if (e === 'Eligible') return make('eligible', 'Eligible', '', 'Qualifies for the full plan.');
+  if (e === 'PT Eligible') {
+    const why = pt?.triggers.some((t) => t.includes('hrs')) && res.hoursPerWeek !== undefined ? ` because they average ${hrs(res.hoursPerWeek)} a week`
+      : pt?.triggers.some((t) => t.includes('/yr')) ? ` because their pay is under ${usd0(s.partTime.maxAnnualGross)} a year` : '';
+    return make('partTime', 'Eligible (part-time plan)', '', `Qualifies for the part-time plan, which uses a smaller ${usd(pt?.deductionPerCheck ?? s.partTime.deductionPerCheck)} deduction per check${why}.`,
+      c && planRule ? [...waysToQualify(res, c, s, db, ' for the full plan').filter((x) => x.startsWith('Would')), ...oddHours(res, c)] : []);
+  }
+  if (e === 'Not Eligible - Reviewer decision') return make('notEligible', 'Not eligible', 'Left out after review', 'Left out after a review of their details.');
+  const ways = () => (c ? waysToQualify(res, c, s, db) : []);
+  const ptTried = pt && !pt.eligible ? ` The part-time plan was checked too, but its savings of ${usd(pt.allotment)} a month are under the ${usd(s.partTime.allotmentThreshold)} it needs.` : '';
+  switch (res.cause) {
+    case 'no-pay':
+      return make('notEligible', 'Not eligible', 'No pay reported', 'No pay was reported for them in the file.', ['Send a recent pay period for them and we will run their numbers.']);
+    case 'funds':
+      return make('notEligible', 'Not eligible', 'Paycheck too small', `The ${usd(c?.dedPerCheck ?? s.deductionPerCheck)} deduction${c && c.existing > 0 ? `, on top of ${usd(c.existing)} in deductions they already have,` : ''} is more than their ${usd((c?.gross ?? 0) + (c?.otherComp ?? 0))} check can cover.${ptTried}`, ways());
+    case 'savings':
+      return make('notEligible', 'Not eligible', 'Savings too low', (c && res.monthly && res.check ? savingsReason(res, c, s, db) : res.monthly ? `Their estimated savings are ${usd(res.monthly.allotment)} a month, and the plan needs ${usd(s.allotmentThreshold)}.` : 'Their estimated savings are under what the plan needs.') + ptTried, ways());
+    case 'low-income':
+      return make('notEligible', 'Not eligible', 'Pay under the minimum', `Their pay comes to ${usd0(res.annualGross ?? 0)} a year, and the plan starts above ${usd0(s.lowIncomeMax)}.${ptTried}`, ways());
+    case 'hours':
+      return make('notEligible', 'Not eligible', 'Too few hours', `They average ${hrs(res.hoursPerPeriod ?? 0)} per pay period, and the plan needs at least ${s.minHoursPerPeriod}.${ptTried}`, [...ways(), ...(c ? oddHours(res, c) : [])]);
+    case 'pay-schedule':
+      return make('review', 'Under review', 'Pay schedule to confirm', 'How often they are paid was not clear in the file, so their numbers are not final.', ['Tell us their pay schedule and we will finish their calculation.']);
+    case 'work-state':
+      return make('review', 'Under review', 'Work state to confirm', 'Their work state is missing from the file.', ['Send their work state and we will finish their calculation.']);
+    case 'state-not-covered':
+      return make('review', 'Under review', 'State being added', `Their work state (${res.row.workState}) is not in our tax tables yet.`, ['We will update their result once it is added.']);
+    case 'no-federal-tax':
+      return make('review', 'Under review', 'Federal tax to confirm', 'The file shows no federal income tax withheld for them today, so we are confirming their savings before enrolling them.');
+    case 'high-savings':
+      return make('review', 'Under review', 'Savings to confirm', `Their estimated savings of ${usd(res.monthly?.allotment ?? 0)} a month are higher than usual, so we are double-checking their payroll details before confirming.`);
+    case 'hours-missing':
+      return make('review', 'Under review', 'Hours to confirm', 'Their hours per pay period are missing from the file.', ['Send their average hours and we will finish their calculation.']);
+    case 'confidence':
+      return make('review', 'Under review', 'Details to confirm', 'Some of their payroll details could not be read clearly from the file.', ['A recent pay stub for them would let us confirm.']);
+    default:
+      return make('review', 'Under review', 'Details to confirm', 'Their details need a second look before their result is final.');
+  }
 }
 
 export function runProposal(rows: CensusRow[], settings: Partial<ProposalSettings> = {}, db: TaxDatabase = loadTaxDatabase()): ProposalResult {

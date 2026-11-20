@@ -12,6 +12,87 @@ const COLS: Record<string, [string, (e: any) => string, boolean?]> = {
   employerSavings: ['Employer savings per year', (e) => money(e.employerAnnualSavings), true],
 };
 
+const TONE_BADGE: Record<string, string> = { eligible: 'b-ok', partTime: 'b-ok', review: 'b-warn', notEligible: 'b-neutral' };
+/** Links published before statuses existed list only eligible employees and carry no tone. */
+const group = (e: any): 'eligible' | 'review' | 'notEligible' => (!e.tone || e.tone === 'partTime' ? 'eligible' : e.tone);
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+/** Who qualifies, who does not, why, and what would change it. */
+function Employees({ r }: { r: any }) {
+  const [filter, setFilter] = useState<'all' | 'eligible' | 'review' | 'notEligible'>('all');
+  const [find, setFind] = useState('');
+  const everyone = r.showEmployees === 'all';
+  const all: any[] = r.employees ?? [];
+  const want = find.trim().toLowerCase();
+  const shown = all.filter((e) => (filter === 'all' || group(e) === filter) && (!want || String(e.name).toLowerCase().includes(want)));
+  const enrolled = shown.filter((e) => group(e) === 'eligible');
+  const others = shown.filter((e) => group(e) !== 'eligible');
+  const n = { all: all.length, eligible: all.filter((e) => group(e) === 'eligible').length, review: all.filter((e) => group(e) === 'review').length, notEligible: all.filter((e) => group(e) === 'notEligible').length };
+  const cols: string[] = r.employeeColumns;
+  const whyNot: any[] = (r.byReason ?? []).filter((x: any) => x.tone === 'review' || x.tone === 'notEligible');
+  const filtered = filter !== 'all' || !!want;
+  return (
+    <section className="fg-report-section">
+      <h2>Employee eligibility</h2>
+      {everyone && all.length > 0 && (
+        <div className="fg-filter noprint">
+          <div className="fg-seg" role="group" aria-label="Show employees by status">
+            {([['all', 'Everyone'], ['eligible', 'Eligible'], ['review', 'Under review'], ['notEligible', 'Not eligible']] as const).filter(([k]) => k !== 'review' || n.review > 0).map(([k, label]) => (
+              <button key={k} type="button" aria-pressed={filter === k} onClick={() => setFilter(k)}>{label} {n[k]}</button>
+            ))}
+          </div>
+          <input type="search" aria-label="Find an employee by name" placeholder="Find an employee" value={find} onChange={(e) => setFind(e.target.value)} />
+          {filtered && <span className="fg-note" style={{ margin: 0 }}>Showing {shown.length} of {all.length}</span>}
+        </div>
+      )}
+      {(!everyone || filter === 'all' || filter === 'eligible') && (
+        <div className="fg-card">
+          <h3>{plural(r.eligible, 'eligible employee')}</h3>
+          <p className="fg-note">{r.eligibleFull} on the full plan{r.eligiblePartTime ? ` and ${r.eligiblePartTime} on the part-time plan` : ''}. Each pays for a {r.benefitPackage ?? 'preventative care'} benefit with a pre-tax deduction, so both their taxes and the company's go down.</p>
+          {r.showEmployees === 'counts' || all.length === 0 ? (
+            <div className="fg-tablebox"><table><tbody>
+              {r.byReason
+                ? r.byReason.map((x: any) => <tr key={`${x.tone}${x.headline}`}><td>{x.status}{x.headline ? `: ${x.headline}` : ''}</td><td className="num">{x.count}</td></tr>)
+                : Object.entries(r.byStatus as Record<string, number>).sort((a, b) => b[1] - a[1]).map(([k, v]) => <tr key={k}><td>{k}</td><td className="num">{v}</td></tr>)}
+            </tbody></table></div>
+          ) : enrolled.length > 0 ? (
+            <div className="fg-tablebox tall"><table>
+              <thead><tr><th>Employee</th>{cols.map((c) => <th key={c} className={COLS[c]?.[2] ? 'num' : ''}>{COLS[c]?.[0]}</th>)}</tr></thead>
+              <tbody>{enrolled.map((e, i) => (
+                <tr key={i}>
+                  <td><b>{e.name}</b>{e.suggestions?.length > 0 && <span className="fg-subline">{e.suggestions.join(' ')}</span>}</td>
+                  {cols.map((c) => <td key={c} className={COLS[c]?.[2] ? 'num' : ''}>{COLS[c]?.[1](e)}</td>)}
+                </tr>
+              ))}
+                {cols.includes('employerSavings') && <tr className="fg-all"><td>{filtered ? `Total for the ${enrolled.length} shown` : 'Total'}</td>{cols.map((c) => <td key={c} className="num">{c === 'employerSavings' ? money(enrolled.reduce((a: number, e: any) => a + e.employerAnnualSavings, 0)) : ''}</td>)}</tr>}
+              </tbody>
+            </table></div>
+          ) : <p className="fg-note" style={{ margin: 0 }}>No eligible employee matches.</p>}
+        </div>
+      )}
+      {everyone && filter !== 'eligible' && n.review + n.notEligible > 0 && (
+        <div className="fg-card">
+          <h3>{n.notEligible > 0 ? `${plural(n.notEligible, 'employee is', 'employees are')} not eligible today` : `${plural(n.review, 'employee is', 'employees are')} under review`}{n.notEligible > 0 && n.review > 0 ? `, and ${n.review} ${n.review === 1 ? 'is' : 'are'} under review` : ''}</h3>
+          <p className="fg-note">Each one shows the rule that decided it and what would change the result.{whyNot.length > 1 ? ` Most common: ${whyNot.slice(0, 4).map((x) => `${x.headline} (${x.count})`).join(', ')}.` : ''}</p>
+          {others.length > 0 ? (
+            <div className="fg-tablebox tall"><table className="fg-stack fg-why">
+              <thead><tr><th>Employee</th><th>Status</th><th>Why</th><th>What would change it</th></tr></thead>
+              <tbody>{others.map((e, i) => (
+                <tr key={i}>
+                  <td><b>{e.name}</b></td>
+                  <td><span className={`badge ${TONE_BADGE[e.tone] ?? 'b-neutral'}`}>{e.status}</span>{e.headline && <div className="fg-headline">{e.headline}</div>}</td>
+                  <td data-label="Why">{e.reason}</td>
+                  <td data-label="What would change it">{e.suggestions?.length ? e.suggestions.map((x: string, j: number) => <div key={j}>{x}</div>) : <span className="muted">Nothing to do for now</span>}</td>
+                </tr>
+              ))}</tbody>
+            </table></div>
+          ) : <p className="fg-note" style={{ margin: 0 }}>No one in this group matches.</p>}
+        </div>
+      )}
+    </section>
+  );
+}
+
 /** The client-facing proposal page (docs/DESIGN.md). Used for the public link and for the preview inside the builder. */
 export function ReportView({ r, preview }: { r: any; preview?: boolean }) {
   const updated = new Date(r.generatedAt).toLocaleString();
@@ -52,25 +133,7 @@ export function ReportView({ r, preview }: { r: any; preview?: boolean }) {
         </div>
       </section>
 
-      {r.showEmployees !== 'none' && (
-        <section className="fg-report-section">
-          <h2>Employee eligibility</h2>
-          <div className="fg-card">
-            <h3>{r.eligible} eligible employees</h3>
-            <p className="fg-note">{r.eligibleFull} on the full plan{r.eligiblePartTime ? ` and ${r.eligiblePartTime} on the part-time plan` : ''}. Each pays for a {r.benefitPackage ?? 'preventative care'} benefit with a pre-tax deduction, so both their taxes and the company's go down.</p>
-            {r.showEmployees === 'list' && r.employees.length > 0 ? (
-              <div className="fg-tablebox tall"><table>
-                <thead><tr><th>Employee</th>{r.employeeColumns.map((c: string) => <th key={c} className={COLS[c]?.[2] ? 'num' : ''}>{COLS[c]?.[0]}</th>)}</tr></thead>
-                <tbody>{r.employees.map((e: any, i: number) => <tr key={i}><td><b>{e.name}</b></td>{r.employeeColumns.map((c: string) => <td key={c} className={COLS[c]?.[2] ? 'num' : ''}>{COLS[c]?.[1](e)}</td>)}</tr>)}
-                  {r.employeeColumns.includes('employerSavings') && <tr className="fg-all"><td>Total</td>{r.employeeColumns.map((c: string) => <td key={c} className="num">{c === 'employerSavings' ? money(r.employees.reduce((a: number, e: any) => a + e.employerAnnualSavings, 0)) : ''}</td>)}</tr>}
-                </tbody>
-              </table></div>
-            ) : (
-              <div className="fg-tablebox"><table><tbody>{Object.entries(r.byStatus as Record<string, number>).sort((a, b) => b[1] - a[1]).map(([k, v]) => <tr key={k}><td>{k}</td><td className="num">{v}</td></tr>)}</tbody></table></div>
-            )}
-          </div>
-        </section>
-      )}
+      {r.showEmployees !== 'none' && <Employees r={r} />}
 
       {r.companies?.length > 0 && (
         <section className="fg-report-section">
@@ -102,7 +165,8 @@ export function ReportView({ r, preview }: { r: any; preview?: boolean }) {
           <div className="kpi fg-cta">
             <h2 style={{ margin: 0 }}>{r.ctaHeading}</h2>
             <p className="s" style={{ fontSize: '1.0625rem', margin: '8px 0 16px' }}>{r.ctaText}</p>
-            {r.ctaUrl ? <a className="fg-btn fg-cta-btn" href={r.ctaUrl} target="_blank" rel="noreferrer">{r.ctaLabel}</a> : <a className="fg-btn fg-cta-btn" href={`mailto:${r.contactEmail}?subject=${encodeURIComponent(`${r.company}: next steps`)}`}>{r.ctaLabel}</a>}
+            {/* With no paperwork link set, the button is shown but goes nowhere. */}
+            {r.ctaUrl ? <a className="fg-btn fg-cta-btn" href={r.ctaUrl} target="_blank" rel="noreferrer">{r.ctaLabel}</a> : <button type="button" className="fg-btn fg-cta-btn">{r.ctaLabel}</button>}
           </div>
         </div>
       </section>

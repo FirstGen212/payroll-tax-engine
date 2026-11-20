@@ -37,6 +37,8 @@ The web app was audited screen by screen against [DESIGN.md](DESIGN.md) and rest
 - **Admin**: users, roles and permissions, audit log as tabs. Role and status use pills with a dot and a word; a per-person change shows a "changed from role" pill.
 - **Proposal queue**: status tabs with counts, one line per proposal, whole-dollar numbers. The status pill opens the browser's own menu to move a proposal along.
 - **Client proposal page** (`/r/...`): page head with the takeaway sentence, four tiles (first is the navy hero), numbered step cards, the employee table inside a scrolling box, a hero call-to-action card, footer. It never shows the internal app name. Print and "Download PDF" keep margins, repeat the table head on each page, and print the hero in color.
+- **Employees on the client page**: a segmented filter (Everyone, Eligible, Under review, Not eligible, each with its count) and a name search above two cards. Eligible employees keep the number table with a total. Everyone else gets a table of status, why, and what would change it; the status is a pill with a dot and a word (amber for under review, neutral for not eligible, so the page does not fill with red), with the deciding rule in bold under it. On a phone those rows stack with small labels instead of scrolling sideways. The filter does not print.
+- The paperwork button is a plain button until a link is set, so it never opens an email or a dead page.
 - Checked in light and dark at 1440px, and at 390px for the client page and sign-in.
 
 ## Still open

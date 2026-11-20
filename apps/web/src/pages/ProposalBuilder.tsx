@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { api, money } from '../api';
+import { api, downloadFile, money } from '../api';
 import { PageHead, StateSelect, useReference } from '../components';
 import { useCan } from '../auth';
 import { PROPOSAL_STATUSES, StatusPill } from './Proposals';
@@ -108,13 +108,9 @@ export default function ProposalBuilder() {
     setBusy('Building workbook…');
     try {
       // People who can't change proposals get the workbook of the saved numbers; editors get what is on screen.
-      const res = editable || !id
-        ? await fetch('/api/proposals/export', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body()) })
-        : await fetch(`/api/proposals/${id}/export`);
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? 'The workbook could not be built.');
-      const url = URL.createObjectURL(await res.blob());
-      Object.assign(document.createElement('a'), { href: url, download: `${meta.name || 'Proposal'} - Underwriting.xlsx` }).click();
-      URL.revokeObjectURL(url);
+      const name = `${meta.name || 'Proposal'} - Employee allotments.xlsx`;
+      if (editable || !id) await downloadFile('/proposals/export', name, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body()) });
+      else await downloadFile(`/proposals/${id}/export`, name);
     } catch (e: any) { setErr(e.message); } finally { setBusy(''); }
   };
   const pickProgram = (price: number) => {
@@ -298,7 +294,7 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
   const dist = s.allotmentDistribution;
   const distTotal = dist.below + dist.near + dist.atOrAbove || 1;
   const csv = () => {
-    const lines = [['Row', ...cols.map((c) => c[1]), 'PT allotment', 'Reason', 'Flags'].join(','), ...shown.map((e: any) => [e.row.rowNumber, ...cols.map((c) => c[2](e) ?? ''), e.partTime?.allotment ?? '', e.reasons.join(' '), e.flags.join(' ')].map((v) => `"${String(v).replace(/"/g, '""')}"`).join(','))];
+    const lines = [['Row', ...cols.map((c) => c[1]), 'PT allotment', 'Reason', 'Flags', 'Status for the client', 'Why', 'What would change it'].join(','), ...shown.map((e: any) => [e.row.rowNumber, ...cols.map((c) => c[2](e) ?? ''), e.partTime?.allotment ?? '', e.reasons.join(' '), e.flags.join(' '), e.explanation ? [e.explanation.status, e.explanation.headline].filter(Boolean).join(': ') : '', e.explanation?.reason ?? '', (e.explanation?.suggestions ?? []).join(' ')].map((v) => `"${String(v).replace(/"/g, '""')}"`).join(','))];
     const url = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
     Object.assign(document.createElement('a'), { href: url, download: `${meta.name || 'proposal'} results.csv` }).click();
   };
@@ -309,7 +305,7 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
         <div className="row" style={{ alignItems: 'center' }}>
           <h3 style={{ margin: 0 }}>Results</h3><span className="badge b-neutral">{s.rowsInFile} rows processed</span>
           <button className="small" onClick={csv}>CSV</button>
-          <button className="small primary" onClick={onDownload}>Underwriting workbook</button>
+          <button className="small primary" onClick={onDownload} title="Each employee's status and savings allotment, the summary, and the underwriting sheet">Export to Excel</button>
           <button className="small" onClick={() => setView(view === 'proposal' ? 'results' : 'proposal')}>{view === 'proposal' ? 'Back to results' : 'Printable summary'}</button>
           <button className="small" disabled title="Next step: connect the app to Pipedrive">Send to Pipedrive</button>
           {busy && <span className="muted small">{busy}</span>}
@@ -377,6 +373,12 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
                       <tr><td colSpan={cols.length + 1} style={{ background: 'var(--fg-tint)' }}>
                         <div className="muted small">Row {e.row.rowNumber} · {e.row.company} · ID {e.row.employeeId} · {e.frequency} · {e.hoursPerPeriod ?? '?'} hrs/period ({e.hoursPerWeek ?? '?'} /wk)</div>
                         {e.reasons.map((r: string, i: number) => <div key={i}><b>Why:</b> {r}</div>)}
+                        {e.eligibility === 'Excluded' ? <div style={{ margin: '6px 0' }}><b>What the client sees:</b> nothing. A row that is left out does not appear on the client page or in its counts.</div> : e.explanation && (
+                          <div style={{ margin: '6px 0', maxWidth: '58rem' }}>
+                            <div><b>What the client sees:</b> {[e.explanation.status, e.explanation.headline].filter(Boolean).join(': ')}. {e.explanation.reason}</div>
+                            {e.explanation.suggestions.map((x: string, i: number) => <div key={i}><b>What would change it:</b> {x}</div>)}
+                          </div>
+                        )}
                         {editable && <OverrideEditor e={e} onChange={(o: any) => onOverride(e.key, o)} busy={!!busy} partTime={result.settings.partTime} />}
                         {e.check && (
                           <table style={{ maxWidth: 760, margin: '8px 0' }}>
@@ -528,8 +530,9 @@ function ClientPage({ id, dirty, repeats, reportSettings: rs, setReportSettings,
             <label>Presented by<input maxLength={120} value={rs.presentedBy} onChange={(e) => set({ presentedBy: e.target.value })} /></label>
             <label>Subtitle<input maxLength={160} value={rs.subtitle} onChange={(e) => set({ subtitle: e.target.value })} /></label>
             <label>Opening note (optional)<textarea maxLength={2000} value={rs.intro} onChange={(e) => set({ intro: e.target.value })} placeholder="A sentence or two for this client" /></label>
-            <label>Employee section<select value={rs.showEmployees} onChange={(e) => set({ showEmployees: e.target.value })}><option value="list">List eligible employees</option><option value="counts">Counts by status only</option><option value="none">Leave out</option></select></label>
-            {rs.showEmployees === 'list' && <div><div className="fg-label" style={{ marginBottom: 4 }}>Employee columns</div>{REPORT_COLS.map(([k, l]) => <label key={k} className="check"><input type="checkbox" checked={rs.employeeColumns.includes(k)} onChange={(e) => set({ employeeColumns: e.target.checked ? [...rs.employeeColumns, k] : rs.employeeColumns.filter((c: string) => c !== k) })} />{l}</label>)}</div>}
+            <label>Employee section<select value={rs.showEmployees} onChange={(e) => set({ showEmployees: e.target.value })}><option value="all">Everyone, with their status and the reason</option><option value="list">Eligible employees only</option><option value="counts">Counts by status only</option><option value="none">Leave out</option></select></label>
+            {rs.showEmployees === 'all' && <p className="fg-note" style={{ margin: 0 }}>People who do not qualify are listed by name with the reason (pay, hours, W-4 details) and what would change it. Anyone with the link can read it.</p>}
+            {(rs.showEmployees === 'list' || rs.showEmployees === 'all') && <div><div className="fg-label" style={{ marginBottom: 4 }}>Columns for eligible employees</div>{REPORT_COLS.map(([k, l]) => <label key={k} className="check"><input type="checkbox" checked={rs.employeeColumns.includes(k)} onChange={(e) => set({ employeeColumns: e.target.checked ? [...rs.employeeColumns, k] : rs.employeeColumns.filter((c: string) => c !== k) })} />{l}</label>)}</div>}
             <label className="check"><input type="checkbox" checked={rs.showValuation} onChange={(e) => set({ showValuation: e.target.checked })} />Show the valuation increase</label>
             <label className="check"><input type="checkbox" checked={rs.showCompanies} onChange={(e) => set({ showCompanies: e.target.checked })} />Break out each company (multi-company files)</label>
             <label className="check"><input type="checkbox" checked={rs.showSource} onChange={(e) => set({ showSource: e.target.checked })} />Show the name of the file the numbers came from</label>
@@ -544,7 +547,7 @@ function ClientPage({ id, dirty, repeats, reportSettings: rs, setReportSettings,
             <label>Next-steps heading<input maxLength={160} value={rs.ctaHeading} onChange={(e) => set({ ctaHeading: e.target.value })} /></label>
             <label>Next-steps text<input maxLength={600} value={rs.ctaText} onChange={(e) => set({ ctaText: e.target.value })} /></label>
             <label>Button label<input maxLength={80} value={rs.ctaLabel} onChange={(e) => set({ ctaLabel: e.target.value })} /></label>
-            <label>Button link (paperwork URL; blank emails the contact address)<input maxLength={500} value={rs.ctaUrl} onChange={(e) => set({ ctaUrl: e.target.value })} placeholder="https://" /></label>
+            <label>Button link (paperwork URL; while this is blank the button goes nowhere)<input maxLength={500} value={rs.ctaUrl} onChange={(e) => set({ ctaUrl: e.target.value })} placeholder="https://" /></label>
             <label>Contact email<input maxLength={200} value={rs.contactEmail} onChange={(e) => set({ contactEmail: e.target.value })} /></label>
             <label>Address<input maxLength={300} value={rs.address} onChange={(e) => set({ address: e.target.value })} /></label>
             <label>Disclaimer<textarea maxLength={4000} value={rs.disclaimer} onChange={(e) => set({ disclaimer: e.target.value })} /></label>

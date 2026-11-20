@@ -8,7 +8,7 @@ import { randomBytes } from 'node:crypto';
 import type { FastifyRequest } from 'fastify';
 import { q } from '../db.js';
 import { audit, can } from '../auth.js';
-import { DEFAULT_REPORT_SETTINGS, ReportSettingsIn, buildSnapshot, mergeReportSettings, newSlug } from './report.js';
+import { DEFAULT_REPORT_SETTINGS, ReportSettingsIn, buildSnapshot, explanationOf, mergeReportSettings, newSlug } from './report.js';
 import { getTaxDb } from '../taxdb.js';
 import { parseWorkbook } from './parse.js';
 
@@ -66,9 +66,73 @@ export async function calculate(body: z.infer<typeof Calc>): Promise<ProposalRes
   return { ...result, unmatchedMunicipalities: unmatched };
 }
 
-/** Build the underwriting workbook: the original columns with the calculated columns filled in, plus a summary tab. */
+const PAY_SCHEDULE: Record<string, string> = { weekly: 'Weekly', biweekly: 'Every two weeks', semimonthly: 'Twice a month', monthly: 'Monthly', quarterly: 'Quarterly', annual: 'Yearly', daily: 'Daily' };
+const TONE_RANK = { eligible: 0, partTime: 1, review: 2, notEligible: 3 } as const;
+
+/**
+ * One row per employee: where they stand, the plan and deduction, and the savings allotment.
+ * Amounts in the allotment and savings columns are filled only for people on a plan, so the totals row adds up to the proposal.
+ */
+function allotmentSheet(wb: ExcelJS.Workbook, result: ProposalResult): void {
+  const usd = '"$"#,##0.00';
+  const ws = wb.addWorksheet('Employee allotments');
+  const columns: [string, number, 'usd' | 'wrap' | ''][] = [
+    ['Employee', 28, ''], ['Employee ID', 14, ''], ['Company', 24, ''], ['State', 8, ''], ['Pay schedule', 16, ''], ['Gross per check', 16, 'usd'],
+    ['Status', 26, ''], ['Plan', 12, ''], ['Pre-tax deduction per check', 18, 'usd'], ['Employee tax savings per month', 18, 'usd'],
+    ['Savings allotment per month', 18, 'usd'], ['Savings allotment per year', 18, 'usd'], ['Employer tax savings per month', 18, 'usd'], ['Employer tax savings per year', 18, 'usd'],
+    ['Allotment on the full plan (calculated)', 20, 'usd'], ['Why', 70, 'wrap'], ['What would change it', 60, 'wrap'], ['Row in file', 10, ''],
+  ];
+  const head = ws.addRow(columns.map((c) => c[0]));
+  head.font = { bold: true };
+  head.alignment = { wrapText: true, vertical: 'top' };
+  const people = result.employees
+    .map((e) => ({ e, x: explanationOf(e), left: e.eligibility === 'Excluded' }))
+    .sort((a, b) => Number(a.left) - Number(b.left) || TONE_RANK[a.x.tone] - TONE_RANK[b.x.tone] || a.e.name.localeCompare(b.e.name));
+  let enrolled = 0;
+  for (const { e, x } of people) {
+    const on = x.tone === 'eligible' || x.tone === 'partTime';
+    const pt = e.eligibility === 'PT Eligible';
+    const m = on ? (pt ? e.partTime?.calc.monthly : e.monthly) : undefined;
+    if (m) enrolled++;
+    ws.addRow([
+      e.name, e.row.employeeId ?? '', e.row.company ?? '', e.row.workState ?? '', e.frequency ? PAY_SCHEDULE[e.frequency] ?? e.frequency : '', e.perPeriod?.gross,
+      x.headline ? `${x.status}: ${x.headline}` : x.status, m ? (pt ? 'Part-time' : 'Full') : '',
+      m ? (pt ? e.partTime!.deductionPerCheck : e.deductionPerCheck) : undefined, m?.employeeTaxSavings,
+      m?.allotment, m ? Math.round(m.allotment * 12 * 100) / 100 : undefined, m?.employerTaxSavings, m ? Math.round(m.employerTaxSavings * 12 * 100) / 100 : undefined,
+      e.monthly?.allotment, x.tone === 'eligible' ? '' : x.reason, x.suggestions.join(' '), e.row.rowNumber,
+    ]);
+  }
+  const last = ws.rowCount;
+  if (last > 1) {
+    const sumOf = (col: number) => {
+      const letter = ws.getColumn(col).letter;
+      let total = 0;
+      for (let r = 2; r <= last; r++) total += Number(ws.getCell(r, col).value ?? 0);
+      return { formula: `SUM(${letter}2:${letter}${last})`, result: Math.round(total * 100) / 100 };
+    };
+    const total = ws.addRow([`Total for the ${enrolled} on a plan`]);
+    for (const col of [9, 10, 11, 12, 13, 14]) total.getCell(col).value = sumOf(col);
+    total.font = { bold: true };
+  }
+  const rate = result.summary.participationRate ?? 1;
+  if (rate < 1) ws.addRow([`This sheet lists every eligible employee. The Summary sheet assumes ${Math.round(rate * 100)}% of them enroll, so its totals are lower.`]);
+  columns.forEach(([, width, kind], i) => {
+    const col = ws.getColumn(i + 1);
+    col.width = width;
+    if (kind === 'usd') col.numFmt = usd;
+    if (kind === 'wrap') col.alignment = { wrapText: true, vertical: 'top' };
+  });
+  ws.views = [{ state: 'frozen', xSplit: 1, ySplit: 1 }];
+  if (last > 1) ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: last, column: columns.length } };
+}
+
+/**
+ * Build the proposal workbook: each employee's status and savings allotment, a summary tab, and the
+ * underwriting sheet (the original columns with the calculated columns filled in).
+ */
 export async function exportWorkbook(name: string, headers: string[], rawRows: Record<string, unknown>[], mapping: Record<string, string | null | undefined>, result: ProposalResult): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
+  allotmentSheet(wb, result);
   const sum = wb.addWorksheet('Summary');
   const s = result.summary;
   const usd = '"$"#,##0.00';
@@ -117,12 +181,16 @@ export async function exportWorkbook(name: string, headers: string[], rawRows: R
   setIf(find(/allotment/i), (i) => emp(i)?.monthly?.allotment);
   const dup = new Map((result.summary.duplicates ?? []).map((d) => [d.rowNumber, d.duplicateOf]));
   setIf(find(/^eligibility$/i), (i) => emp(i)?.eligibility ?? (dup.has(i + 2) ? `Duplicate of row ${dup.get(i + 2)}` : undefined));
-  const extra = ['First Gen per check', 'Net per check', 'Employee tax savings / mo', 'Employer tax savings / mo', 'Eff. rate', 'PT allotment', 'Reason', 'Data flags'];
+  // The monthly allotment goes into the file's own allotment column when it has one, and into a new column when it does not.
+  const ownAllotment = !!find(/allotment/i);
+  const extra = ['First Gen per check', 'Net per check', 'Employee tax savings / mo', 'Employer tax savings / mo', 'Eff. rate', 'PT allotment', 'Reason', 'Data flags', ...(ownAllotment ? [] : ['Monthly allotment']), 'Status', 'Why', 'What would change it'];
   ws.addRow([...headers, ...extra]).font = { bold: true };
   rawRows.forEach((r, i) => {
     const e = emp(i);
+    const x = e ? explanationOf(e) : undefined;
     const vals = headers.map((h) => (fill[h] ? fill[h](i) ?? r[h] : r[h]));
-    ws.addRow([...vals, e?.deductionPerCheck, e?.perPeriod?.net, e?.monthly?.employeeTaxSavings, e?.monthly?.employerTaxSavings, e?.perPeriod?.effectiveRate, e?.partTime?.allotment, e?.reasons.join(' '), e?.flags.join(' ')]);
+    ws.addRow([...vals, e?.deductionPerCheck, e?.perPeriod?.net, e?.monthly?.employeeTaxSavings, e?.monthly?.employerTaxSavings, e?.perPeriod?.effectiveRate, e?.partTime?.allotment, e?.reasons.join(' '), e?.flags.join(' '),
+      ...(ownAllotment ? [] : [e?.monthly?.allotment]), x ? (x.headline ? `${x.status}: ${x.headline}` : x.status) : '', x?.reason, x?.suggestions.join(' ')]);
   });
   ws.views = [{ state: 'frozen', ySplit: 1 }];
   headers.concat(extra).forEach((h, i) => (ws.getColumn(i + 1).width = Math.min(Math.max(h.length + 2, 10), 40)));
@@ -155,7 +223,7 @@ export async function proposalRoutes(app: FastifyInstance) {
     const result = await calculate(b);
     const buf = await exportWorkbook(b.name, b.headers, b.rows, b.mapping, result);
     reply.header('content-type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    reply.header('content-disposition', `attachment; filename="${b.name.replace(/[^\w .-]/g, '')} - Underwriting.xlsx"`);
+    reply.header('content-disposition', `attachment; filename="${b.name.replace(/[^\w .-]/g, '')} - Employee allotments.xlsx"`);
     return reply.send(buf);
   });
 
@@ -291,7 +359,7 @@ export async function proposalRoutes(app: FastifyInstance) {
     const result = { settings: p.settings, employees: p.results, summary: p.summary } as ProposalResult;
     const buf = await exportWorkbook(p.name, p.headers, p.raw_rows, p.mapping, result);
     reply.header('content-type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    reply.header('content-disposition', `attachment; filename="${String(p.name).replace(/[^\w .-]/g, '')} - Underwriting.xlsx"`);
+    reply.header('content-disposition', `attachment; filename="${String(p.name).replace(/[^\w .-]/g, '')} - Employee allotments.xlsx"`);
     return reply.send(buf);
   });
 }

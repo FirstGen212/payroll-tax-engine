@@ -1,14 +1,14 @@
 /** The client-facing proposal page: its editable settings and the snapshot a published link shows. */
 import { z } from 'zod';
-import type { ProposalEmployeeResult, ProposalSummary } from '@pte/engine';
+import type { EmployeeExplanation, ProposalEmployeeResult, ProposalSummary } from '@pte/engine';
 
 export interface ReportSettings {
   title?: string;
   presentedBy: string;
   subtitle: string;
   intro: string;
-  /** What the employee section shows: nothing, counts by status, or the list of eligible employees. */
-  showEmployees: 'none' | 'counts' | 'list';
+  /** What the employee section shows: nothing, counts by status, the eligible employees, or everyone with their status and the reason. */
+  showEmployees: 'none' | 'counts' | 'list' | 'all';
   /** Columns of the employee list. */
   employeeColumns: ('state' | 'plan' | 'deduction' | 'employeeSavings' | 'employerSavings')[];
   showValuation: boolean;
@@ -29,7 +29,7 @@ export const DEFAULT_REPORT_SETTINGS: ReportSettings = {
   presentedBy: 'First Gen Financial',
   subtitle: 'First Gen Health Summary',
   intro: '',
-  showEmployees: 'list',
+  showEmployees: 'all',
   employeeColumns: ['plan', 'deduction', 'employeeSavings', 'employerSavings'],
   showValuation: true,
   showCompanies: true,
@@ -54,7 +54,7 @@ export const ReportSettingsIn = z.object({
   presentedBy: z.string().max(120),
   subtitle: z.string().max(160),
   intro: z.string().max(2000),
-  showEmployees: z.enum(['none', 'counts', 'list']),
+  showEmployees: z.enum(['none', 'counts', 'list', 'all']),
   employeeColumns: z.array(z.enum(['state', 'plan', 'deduction', 'employeeSavings', 'employerSavings'])).max(5),
   showValuation: z.boolean(),
   showCompanies: z.boolean(),
@@ -81,13 +81,40 @@ export const mergeReportSettings = (r?: unknown): ReportSettings => {
 const slugify = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').slice(0, 60).replace(/^-+|-+$/g, '') || 'proposal';
 export const newSlug = (name: string, rand: string) => `${slugify(name)}-${rand}`;
 
+/**
+ * The client wording for a result. Proposals calculated before explanations existed have none stored,
+ * so those fall back to the status and the rule's own sentence (reviewer notes are never shown).
+ */
+export function explanationOf(e: ProposalEmployeeResult): EmployeeExplanation {
+  if (e.explanation) return e.explanation;
+  const el = e.eligibility;
+  if (el === 'Excluded') return { status: 'Left out', tone: 'notEligible', headline: '', reason: 'Left out of this proposal by the reviewer.', suggestions: [] };
+  if (el === 'Eligible') return { status: 'Eligible', tone: 'eligible', headline: '', reason: 'Qualifies for the full plan.', suggestions: [] };
+  if (el === 'PT Eligible') return { status: 'Eligible (part-time plan)', tone: 'partTime', headline: '', reason: 'Qualifies for the part-time plan.', suggestions: [] };
+  if (el === 'NEEDS REVIEW' || el === 'No Federal Taxes Paid') return { status: 'Under review', tone: 'review', headline: 'Details to confirm', reason: 'Their details need a second look before their result is final.', suggestions: [] };
+  const reviewer = el === 'Not Eligible - Reviewer decision';
+  return { status: 'Not eligible', tone: 'notEligible', headline: reviewer ? 'Left out after review' : el.replace(/^Not Eligible - /, ''), reason: reviewer ? 'Left out after a review of their details.' : e.reasons?.[0] ?? '', suggestions: [] };
+}
+
+const TONE_ORDER = { eligible: 0, partTime: 0, review: 1, notEligible: 2 } as const;
+
 /** Freeze what the client sees. Later edits to the proposal don't change a link that was already sent. */
 export function buildSnapshot(p: { name: string; company?: string | null; file_name?: string | null; settings: any; summary: ProposalSummary; results: ProposalEmployeeResult[]; report_settings?: unknown }) {
   const rs = mergeReportSettings(p.report_settings);
   const s = p.summary;
   const company = p.company || p.name.replace(/ proposal$/i, '');
   const periods = s.payFrequency?.periodsPerYear || 26;
-  const enrolled = (p.results ?? []).filter((e) => e.eligibility === 'Eligible' || e.eligibility === 'PT Eligible');
+  // Rows the reviewer left out are an internal decision, not a status the client needs to see.
+  const people = (p.results ?? []).filter((e) => e.eligibility !== 'Excluded').map((e) => ({ e, x: explanationOf(e) }));
+  const listed = rs.showEmployees === 'all' ? people : rs.showEmployees === 'list' ? people.filter(({ x }) => x.tone === 'eligible' || x.tone === 'partTime') : [];
+  const count = (tone: EmployeeExplanation['tone']) => people.filter(({ x }) => x.tone === tone).length;
+  const reasons = new Map<string, { status: string; tone: string; headline: string; count: number }>();
+  for (const { x } of people) {
+    const k = `${x.tone}|${x.headline}`;
+    const r = reasons.get(k) ?? { status: x.status, tone: x.tone, headline: x.headline, count: 0 };
+    r.count++;
+    reasons.set(k, r);
+  }
   const rate = s.participationRate ?? 1;
   return {
     company,
@@ -103,7 +130,8 @@ export function buildSnapshot(p: { name: string; company?: string | null; file_n
     valuationIncrease: s.valuationIncrease,
     perPeriodSavings: Math.round((s.employerAnnualSavings.total / periods) * 100) / 100,
     payFrequency: { label: FREQ_LABEL[s.payFrequency?.frequency ?? 'biweekly'] ?? 'Bi-Weekly', periodsPerYear: periods },
-    employeesReviewed: s.employees,
+    // The same people the list shows: a row the reviewer left out is not part of the client's headcount.
+    employeesReviewed: s.employees - (s.byEligibility?.Excluded ?? 0),
     eligible: s.eligibleTotal,
     eligibleFull: s.eligibleFull,
     eligiblePartTime: s.eligiblePartTime,
@@ -111,23 +139,34 @@ export function buildSnapshot(p: { name: string; company?: string | null; file_n
     participationRate: rate,
     employeeAnnualTaxSavings: s.employeeAnnualTaxSavings,
     benefitPackage: s.benefitPackage?.name,
-    // Rows the reviewer left out are an internal decision, not a status the client needs to see.
     byStatus: Object.fromEntries(Object.entries(s.byEligibility ?? {}).filter(([k]) => k !== 'Excluded')),
+    /** People by client status, and by the rule that decided it (largest group first within a status). */
+    statusCounts: { eligible: count('eligible') + count('partTime'), partTime: count('partTime'), review: count('review'), notEligible: count('notEligible') },
+    byReason: [...reasons.values()].sort((a, b) => TONE_ORDER[a.tone as keyof typeof TONE_ORDER] - TONE_ORDER[b.tone as keyof typeof TONE_ORDER] || b.count - a.count),
     companies: rs.showCompanies && (s.byCompany?.length ?? 0) > 1 ? s.byCompany : [],
-    employees: rs.showEmployees === 'list'
-      ? enrolled.map((e) => {
-          const pt = e.eligibility === 'PT Eligible';
-          const m = pt ? e.partTime!.calc.monthly : e.monthly!;
-          return {
-            name: e.name,
-            state: e.row.workState,
+    employees: listed
+      .map(({ e, x }) => {
+        const enrolled = x.tone === 'eligible' || x.tone === 'partTime';
+        const pt = e.eligibility === 'PT Eligible';
+        const m = pt ? e.partTime!.calc.monthly : e.monthly;
+        return {
+          name: e.name,
+          state: e.row.workState,
+          status: x.status,
+          tone: x.tone,
+          headline: x.headline,
+          reason: x.reason,
+          suggestions: x.suggestions,
+          // Amounts only for people on a plan: a figure next to someone who is not enrolled would read as a promise.
+          ...(enrolled && m ? {
             plan: pt ? 'Part-time' : 'Full',
             deductionPerCheck: pt ? e.partTime!.deductionPerCheck : e.perPeriod?.firstGen,
-            employeeMonthlySavings: pt ? e.partTime!.allotment : e.monthly!.allotment,
+            employeeMonthlySavings: pt ? e.partTime!.allotment : m.allotment,
             employerAnnualSavings: Math.round(m.employerTaxSavings * 12 * 100) / 100,
-          };
-        }).sort((a, b) => a.name.localeCompare(b.name))
-      : [],
+          } : {}),
+        };
+      })
+      .sort((a, b) => TONE_ORDER[a.tone] - TONE_ORDER[b.tone] || a.name.localeCompare(b.name)),
     showEmployees: rs.showEmployees,
     employeeColumns: rs.employeeColumns,
     showValuation: rs.showValuation,

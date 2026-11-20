@@ -109,7 +109,9 @@ export const CUSTOM_HANDLERS: Record<string, Handler> = {
     const std = Math.max(min, max - steps * ((max - min) / 20));
     const pe = p.personalExemption[s] ?? 1500;
     const deps = ctx.w4.dependents ?? 0;
-    const depAmt = (p.dependentTiers as [number, number][]).find(([lim]) => annual <= lim)![1];
+    // The top tier has no upper limit. It is stored as Infinity, which becomes null once the rule has been through JSON (the database).
+    const tiers = p.dependentTiers as [number | null, number][];
+    const depAmt = (tiers.find(([lim]) => lim === null || annual <= lim) ?? tiers[tiers.length - 1])[1];
     const fed = ctx.annualFederalTax ?? 0;
     const taxable = Math.max(0, annual - std - pe - deps * depAmt - fed);
     const brackets: Bracket[] = s === 'mfj' ? p.brackets.mfj : p.brackets.single;

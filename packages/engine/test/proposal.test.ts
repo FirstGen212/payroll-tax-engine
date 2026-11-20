@@ -132,4 +132,79 @@ describe('proposal tool', () => {
     expect(all.summary.payFrequency).toMatchObject({ frequency: 'weekly', periodsPerYear: 52 });
     expect(all.summary.byCompany.map((c) => c.company).sort()).toEqual(['(no company)', 'B Co']);
   });
+
+  it('explains every result in plain words, with what would change it', () => {
+    const rows: CensusRow[] = [
+      base,
+      { ...base, employeeId: 'a', grossPay: 0 },
+      { ...base, employeeId: 'b', grossPay: 150 }, // deduction exceeds pay
+      { ...base, employeeId: 'c', grossPay: 480 }, // $24,960/yr at $12 an hour
+      { ...base, employeeId: 'd', hoursPerPeriod: 20 },
+      { ...base, employeeId: 'f', payFrequency: 'sometimes' },
+    ];
+    const x = runProposal(rows, { ...std, partTime: { enabled: false } as any }, db).employees.map((e) => e.explanation!);
+    expect(x.map((e) => [e.tone, e.status, e.headline])).toEqual([
+      ['eligible', 'Eligible', ''],
+      ['notEligible', 'Not eligible', 'No pay reported'],
+      ['notEligible', 'Not eligible', 'Paycheck too small'],
+      ['notEligible', 'Not eligible', 'Pay under the minimum'],
+      ['notEligible', 'Not eligible', 'Too few hours'],
+      ['review', 'Under review', 'Pay schedule to confirm'],
+    ]);
+    expect(x[0].suggestions).toEqual([]);
+    expect(x[2].reason).toBe('The $200.00 deduction is more than their $150.00 check can cover.');
+    expect(x[2].suggestions[0]).toMatch(/^Would qualify at about \$501 per check, \$351 more than today\./);
+    expect(x[3].reason).toBe('Their pay comes to $24,960 a year, and the plan starts above $26,000.');
+    expect(x[3].suggestions).toEqual(['Would qualify at about $501 per check, $21 more than today. At their current $12.00 an hour that is about 42 hours per pay period, 2 more than today.']);
+    expect(x[4].reason).toBe('They average 20 hours per pay period, and the plan needs at least 23.');
+    expect(x[4].suggestions).toEqual(['Would qualify at 23 or more hours per pay period, about 3 more than today.']);
+    expect(x[5].suggestions).toEqual(['Tell us their pay schedule and we will finish their calculation.']);
+  });
+
+  it('says what keeps the savings low: the pay, the W-4 credits or the filing status', () => {
+    const off = { enabled: false } as any;
+    // $200 saves 7.65% + 12% = 19.65%; a $149 allotment needs 149 x 12 / (52 x 0.75 x 200) = 22.9%
+    const pay = runProposal([base], { ...std, allotmentThreshold: 149, partTime: off }, db).employees[0].explanation!;
+    expect(pay.headline).toBe('Savings too low');
+    expect(pay.reason).toMatch(/^Their estimated savings are \$127\.\d\d a month, and the plan needs \$149\.00\. Each dollar set aside saves them about 20 cents in tax, and the plan needs about 23 cents\./);
+    expect(pay.reason).toMatch(/at a low rate, because of the tax bracket their pay falls in\. Texas has no state income tax/);
+    expect(pay.suggestions[0]).toMatch(/^Would qualify at about \$[\d,]+ per check, \$[\d,]+ more than today\./);
+
+    const credits = runProposal([{ ...base, dependentCredits: 6000 }], { ...std, partTime: off }, db).employees[0];
+    expect(credits.eligibility).toBe('Not Eligible - Insufficient Savings');
+    expect(credits.explanation!.reason).toMatch(/No federal income tax is withheld from their check today, because their W-4 claims \$6,000 a year in dependent credits\./);
+
+    const single = runProposal([base], { ...std, allotmentThreshold: 120, partTime: off }, db).employees[0];
+    const married = runProposal([{ ...base, federalFilingStatus: 'Married filing jointly' }], { ...std, allotmentThreshold: 120, partTime: off }, db).employees[0];
+    expect(single.eligibility).toBe('Eligible');
+    expect(married.eligibility).toBe('Not Eligible - Insufficient Savings');
+    expect(married.explanation!.reason).toMatch(/because their W-4 uses the Married filing jointly rate, which withholds less than the Single rate at this pay/);
+    // A W-4 is the employee's own choice, so it is given as the reason and never as the thing to change.
+    for (const e of [credits, married]) expect(e.explanation!.suggestions.join(' ')).not.toMatch(/W-4|filing|credit/i);
+  });
+
+  it('part-time plan results say how to reach the full plan', () => {
+    const r = runProposal([{ ...base, hoursPerPeriod: 20 }], { ...std, partTime: { enabled: true, deductionPerCheck: 120, allotmentThreshold: 50, maxHoursPerWeek: 29, maxAnnualGross: 20000 } }, db);
+    expect(r.employees[0].explanation).toEqual({
+      status: 'Eligible (part-time plan)', tone: 'partTime', headline: '',
+      reason: 'Qualifies for the part-time plan, which uses a smaller $120.00 deduction per check because they average 20 hours a week.',
+      suggestions: ['Would qualify for the full plan at 23 or more hours per pay period, about 3 more than today.'],
+    });
+  });
+
+  it('keeps reviewer notes out of the client wording', () => {
+    const key = runProposal([base], std, db).employees[0].key;
+    const out = runProposal([base], { ...std, overrides: { [key]: { status: 'Not Eligible', note: 'Owner asked us to skip the family' } } }, db).employees[0];
+    expect(out.reasons.join(' ')).toMatch(/Owner asked/);
+    expect(JSON.stringify(out.explanation)).not.toMatch(/Owner asked/);
+    expect(out.explanation).toMatchObject({ status: 'Not eligible', headline: 'Left out after review' });
+  });
+
+  it('calculates Alabama pay over $100,000 with tax rules that came from the database', () => {
+    // The database stores rules as JSON, which turns the open-ended top tier (Infinity) into null.
+    const stored = JSON.parse(JSON.stringify(db));
+    const r = runProposal([{ ...base, workState: 'AL', grossPay: 2500 }], std, stored);
+    expect(r.employees[0].eligibility).toBe('Eligible');
+    expect(r.employees[0].monthly!.allotment).toBeGreaterThan(100);
+  });
 });

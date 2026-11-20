@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { api, money } from '../api';
+import { api, downloadFile, money } from '../api';
 import { useAuth, useCan } from '../auth';
 import { PageHead } from '../components';
 
@@ -40,6 +40,7 @@ export default function Proposals() {
     setMsg(`Recalculated ${p.name} with today's tax data: employer savings ${money(before)} → ${money(after)}.`);
     await load();
   });
+  const exportFile = (p: any) => act(`Building the Excel file for ${p.name}…`, () => downloadFile(`/proposals/${p.id}/export`, `${p.name} - Employee allotments.xlsx`));
   const duplicate = (p: any) => act('Copying…', async () => { const r = await api(`/proposals/${p.id}/duplicate`, { method: 'POST' }); nav(`/proposals/${r.id}`); });
   const remove = (p: any) => { if (confirm(`Delete proposal "${p.name}"? Its client links stop working.`)) void act('Deleting…', async () => { await api(`/proposals/${p.id}`, { method: 'DELETE' }); await load(); }); };
   const move = (p: any, to: string) => act('', async () => { await api(`/proposals/${p.id}/status`, { json: { status: to } }); await load(); });
@@ -80,6 +81,7 @@ export default function Proposals() {
                 <td className="fg-hide-narrow" style={{ whiteSpace: 'nowrap' }}>{p.latest_report && <button className="fg-link small" onClick={() => copyLink(p.latest_report.slug)} title={`/r/${p.latest_report.slug}`}>Copy link</button>}{p.latest_report && <div className="muted small">{p.latest_report.views} {p.latest_report.views === 1 ? 'view' : 'views'}</div>}{!p.latest_report && <span className="muted small">Not published</span>}</td>
                 <td className="small" style={{ whiteSpace: 'nowrap' }}>{new Date(p.updated_at).toLocaleDateString()}<div className="muted">{p.revisions} versions</div></td>
                 <td style={{ whiteSpace: 'nowrap' }}>
+                  <button className="small" disabled={!!busy} title="Excel file with each employee's status and savings allotment" onClick={() => exportFile(p)}>Export</button>{' '}
                   {can('proposals.edit') && <><button className="small" disabled={!!busy} onClick={() => recalc(p)}>Recalculate</button>{' '}<button className="small" disabled={!!busy} onClick={() => duplicate(p)}>Copy</button>{' '}</>}
                   {can('proposals.delete') && <button className="small" disabled={!!busy} onClick={() => remove(p)}>Delete</button>}
                 </td>
