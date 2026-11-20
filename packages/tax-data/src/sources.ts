@@ -30,6 +30,21 @@ export const SOURCES: Source[] = [
   { id: 'ed-awg', agency: 'US Dept. of Education', title: 'Administrative Wage Garnishment (15% of disposable pay)', url: 'https://www.ed.gov/' },
   { id: 'pl-119-21', agency: 'Congress', title: 'P.L. 119-21 (2025 reconciliation act): qualified tips and overtime deductions, W-2 reporting', url: 'https://www.congress.gov/bill/119th-congress/house-bill/1' },
 
+  // ---- Compilations and agency pages read for the November 2026 re-verification ----
+  { id: 'ey-sui-2026', agency: 'EY (secondary)', title: 'State unemployment insurance wage bases and rates for 2025 and 2026', url: 'https://taxnews.ey.com/news/2026-1640-state-unemployment-insurance-wage-bases-and-tax-rates-for-2026-updated-as-of-july-29-2026', retrieved: '2026-11-20', notes: 'State-by-state compilation citing each workforce agency.' },
+  { id: 'aps-sui-2027', agency: 'APS Payroll (secondary)', title: '2027 state unemployment wage bases', url: 'https://apspayroll.com/insights/suta-wage-bases/', retrieved: '2026-11-20', notes: 'Covers the states that had announced 2027 by November 2026.' },
+  { id: 'mercer-pfml-2026', agency: 'Mercer (secondary)', title: '2026 state paid family and medical leave and disability contribution rates', url: 'https://marketingpreview.mercer.com/content/dam/mercer-dotcom/migrated-assets/blogs/law-and-policy/2026/02/pdf-2026-state-paid-family-and-medical-leave-contributions-and-benefits.pdf', retrieved: '2026-11-20' },
+  { id: 'nfp-wa-pfml-2027', agency: 'NFP (secondary)', title: 'Washington Paid Family and Medical Leave 2027 premium rate', url: 'https://www.nfp.com/insights/washington-announces-2027-paid-family-and-medical-leave-premium-rate/', retrieved: '2026-11-20' },
+  { id: 'ny-dfs-pfl-2027', agency: 'NY Department of Financial Services', title: 'Paid Family Leave premium rate for 2027', url: 'https://www.dfs.ny.gov/apps-and-licensing/health-insurers/pfl-rate-decision-2027-page', retrieved: '2026-11-20' },
+  { id: 'ma-dfml-2027', agency: 'MA Department of Family and Medical Leave', title: 'PFML contribution rates for 2026 and 2027', url: 'https://www.mass.gov/', retrieved: '2026-11-20' },
+  { id: 'md-famli-2027', agency: 'Maryland Department of Labor', title: 'FAMLI contribution rate from January 1, 2027', url: 'https://paidleave.maryland.gov/', retrieved: '2026-11-20' },
+  { id: 'edd-de44-2026', agency: 'California EDD', title: 'DE 44 California withholding schedules for 2026 (Method B)', url: 'https://edd.ca.gov/siteassets/files/pdf_pub_ctr/26methb.pdf', retrieved: '2026-11-20' },
+  { id: 'edd-de44-2027', agency: 'California EDD', title: 'California withholding schedules for 2027 (Method B)', url: 'https://edd.ca.gov/siteassets/files/pdf_pub_ctr/27methb.pdf', retrieved: '2026-11-20' },
+  { id: 'edd-rates', agency: 'California EDD', title: 'Rates and withholding: SDI, UI and ETT', url: 'https://edd.ca.gov/en/payroll_taxes/rates_and_withholding/', retrieved: '2026-11-20' },
+  { id: 'irs-n-2026-66', agency: 'IRS', title: 'Notice 2026-66: 2027 retirement plan limits', url: 'https://www.irs.gov/retirement-plans/cola-increases-for-dollar-limitations-on-benefits-and-contributions', retrieved: '2026-11-20' },
+  { id: 'irs-rp-2026-24', agency: 'IRS', title: 'Rev. Proc. 2026-24: 2027 HSA and high-deductible plan amounts', url: 'https://www.irs.gov/pub/irs-drop/rp-26-24.pdf', retrieved: '2026-11-20' },
+  { id: 'dol-futa-2026', agency: 'US DOL', title: 'FUTA credit reduction determination for 2026 (November 10, 2026)', url: 'https://oui.doleta.gov/unemploy/futa_credit.asp', retrieved: '2026-11-20' },
+
   // ---- Generic state agency entry points (row-level notes refine these) ----
   { id: 'fta-state-rates', agency: 'Federation of Tax Administrators (secondary)', title: 'State individual income tax rates / agency directory', url: 'https://taxadmin.org/' },
   { id: 'dol-sui-comparison', agency: 'US DOL (secondary)', title: 'Comparison of State Unemployment Insurance Laws', url: 'https://oui.doleta.gov/unemploy/statelaws.asp' },

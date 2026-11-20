@@ -59,15 +59,27 @@ export function genericFormula(f: StateFormula, ctx: StateContext): StateComputa
   } else {
     let taxable = annual;
     const sd = pick(f.standardDeduction, status);
-    if (sd !== undefined) {
-      const amt = typeof sd === 'number' ? sd : Math.min(sd.max, Math.max(sd.min, annual * sd.pct));
+    if (sd !== undefined && !(f.standardDeductionNeedsAllowance && allowances === 0)) {
+      let amt = typeof sd === 'number' ? sd : Math.min(sd.max, Math.max(sd.min, annual * sd.pct));
+      const phase = pick(f.standardDeductionPhaseOut, status);
+      if (phase && annual > phase.start) amt = annual >= phase.end ? 0 : amt * ((phase.end - annual) / (phase.end - phase.start));
+      const slide = pick(f.standardDeductionSlide, status);
+      if (slide && annual > slide.start) amt = Math.max(0, amt - (annual - slide.start) * slide.rate);
       taxable -= amt;
       lines.push(`Standard deduction -${amt.toFixed(2)}`);
     }
     const pe = pick(f.personalExemption, status);
     if (pe) { taxable -= pe; lines.push(`Personal exemption -${pe}`); }
-    if (f.allowanceDeduction && allowances) { taxable -= allowances * f.allowanceDeduction; lines.push(`Allowances ${allowances} x ${f.allowanceDeduction}`); }
-    if (f.allowanceDeduction && ctx.w4.additionalAllowances) { taxable -= ctx.w4.additionalAllowances * f.allowanceDeduction; lines.push(`Additional allowances ${ctx.w4.additionalAllowances} x ${f.allowanceDeduction}`); }
+    const allowanceOff = f.allowanceNoneAbove !== undefined && annual > f.allowanceNoneAbove;
+    if (allowanceOff && allowances) lines.push(`Annual wages over ${f.allowanceNoneAbove}: no allowance deduction`);
+    if (!allowanceOff) {
+      const tier = pick(f.allowanceTiers, status);
+      const high = tier ? Math.min(allowances, tier.count) : 0;
+      if (high) { taxable -= high * tier!.amount; lines.push(`Allowances ${high} x ${tier!.amount}`); }
+      const rest = allowances - high;
+      if (f.allowanceDeduction && rest) { taxable -= rest * f.allowanceDeduction; lines.push(`Allowances ${rest} x ${f.allowanceDeduction}`); }
+      if (f.allowanceDeduction && ctx.w4.additionalAllowances) { taxable -= ctx.w4.additionalAllowances * f.allowanceDeduction; lines.push(`Additional allowances ${ctx.w4.additionalAllowances} x ${f.allowanceDeduction}`); }
+    }
     if (f.dependentDeduction && deps) { taxable -= deps * f.dependentDeduction; lines.push(`Dependents ${deps} x ${f.dependentDeduction}`); }
     if (f.federalTaxDeduction && ctx.annualFederalTax) {
       const cap = pick(f.federalTaxDeduction.cap, status) ?? Infinity;
@@ -105,8 +117,10 @@ export const CUSTOM_HANDLERS: Record<string, Handler> = {
     const s = statusKey(statusFor(ctx.w4, ctx.federalW4));
     const annual = ctx.wages * ctx.periods;
     const [min, max] = (p.stdDed[s] ?? p.stdDed.single) as [number, number];
-    const steps = Math.max(0, Math.ceil((annual - p.stdDedPhase.start) / p.stdDedPhase.step));
-    const std = Math.max(min, max - steps * ((max - min) / 20));
+    // The deduction drops by a fixed amount for each band of wages at or above the start, down to the minimum.
+    const ph = (p.stdDedPhase[s] ?? p.stdDedPhase.single ?? p.stdDedPhase) as { start: number; step: number; drop?: number };
+    const bands = annual >= ph.start ? Math.floor((annual - ph.start) / ph.step) + 1 : 0;
+    const std = Math.max(min, max - bands * (ph.drop ?? (max - min) / 20));
     const pe = p.personalExemption[s] ?? 1500;
     const deps = ctx.w4.dependents ?? 0;
     // The top tier has no upper limit. It is stored as Infinity, which becomes null once the rule has been through JSON (the database).
@@ -187,10 +201,39 @@ export const CUSTOM_HANDLERS: Record<string, Handler> = {
 
   /** Puerto Rico annualized brackets. */
   PR(p, ctx) {
+    const st = statusKey(statusFor(ctx.w4, ctx.federalW4));
     const annual = ctx.wages * ctx.periods;
-    const taxable = Math.max(0, annual - (ctx.w4.dependents ?? 0) * p.dependentDeduction);
+    const pe = (p.personalExemption?.[st] ?? p.personalExemption?.single ?? 0) as number;
+    const allow = (ctx.w4.allowances ?? 0) * (p.allowanceDeduction ?? 0);
+    const taxable = Math.max(0, annual - pe - allow - (ctx.w4.dependents ?? 0) * p.dependentDeduction);
     const tax = bracketTax(taxable, p.brackets);
-    return { amount: tax / ctx.periods, lines: [`PR: tax on ${taxable.toFixed(2)} = ${tax.toFixed(2)}`] };
+    return { amount: tax / ctx.periods, lines: [`PR: ${annual.toFixed(2)} - exemption ${pe} - allowances ${allow} - dependents = ${taxable.toFixed(2)}; tax ${tax.toFixed(2)}`] };
+  },
+
+  /** Oregon: federal tax subtraction (capped, phased out), standard deduction, two tables split by annual wages, credit per allowance. */
+  OR(p, ctx) {
+    const st = statusFor(ctx.w4, ctx.federalW4);
+    const married = st === 'mfj' || st === 'qss' || st === 'mfj_one_income';
+    let allowances = ctx.w4.allowances ?? 0;
+    const regular = ctx.useFlatSupplemental ? ctx.wages - ctx.supplemental : ctx.wages;
+    const annual = regular * ctx.periods;
+    const side = married ? 'mfj' : 'single';
+    const start = p.federalTaxPhase[side] as number;
+    const step = p.federalTaxPhase.step[side] as number;
+    const cap = annual >= start ? Math.max(0, p.federalTaxCap - p.federalTaxPhase.reduceBy * (Math.floor((annual - start) / step) + 1)) : p.federalTaxCap;
+    const fed = Math.min(cap, Math.max(0, ctx.annualFederalTax ?? 0));
+    const table = !married && allowances < 3 ? 'single' : 'other';
+    const std = table === 'single' ? p.standardDeduction.singleUnder3 : p.standardDeduction.other;
+    const base = Math.max(0, annual - fed - std);
+    if (annual > p.allowanceReduction[side]) allowances = Math.max(0, allowances - 1);
+    let tax: number;
+    if (annual < p.lowWageLimit || base <= p.high[table].floor) tax = (annual < p.lowWageLimit ? p.allowanceCredit : 0) + bracketTax(base, p.low[table]);
+    else tax = p.high[table].base + bracketTax(base - p.high[table].floor, p.high[table].brackets);
+    tax = Math.max(0, tax - allowances * p.allowanceCredit);
+    const lines = [`OR: ${annual.toFixed(2)} - federal tax ${fed.toFixed(2)} (cap ${cap}) - standard deduction ${std} = ${base.toFixed(2)}; tax less ${allowances} x ${p.allowanceCredit} credit = ${tax.toFixed(2)}`];
+    let per = tax / ctx.periods;
+    if (ctx.useFlatSupplemental && ctx.supplemental) { per += ctx.supplemental * p.supplementalRate; lines.push(`OR supplemental ${p.supplementalRate}`); }
+    return { amount: Math.round(per), lines };
   },
 
   /** Guam, USVI, CNMI (and placeholder American Samoa): withhold using federal Pub 15-T on the federal W-4. */

@@ -62,7 +62,7 @@ app.get('/api/rules/:id/history', async (req) => q('select * from tax_rule_histo
 /** Edit a rule (research workflow): updates calc/status/notes and records history. */
 app.patch('/api/rules/:id', async (req) => {
   const id = (req.params as any).id as string;
-  const body = z.object({ calc: z.any().optional(), status: z.enum(['published', 'draft', 'projected', 'unverified', 'placeholder']).optional(), notes: z.string().nullish(), effectiveTo: z.string().nullable().optional(), by: z.string().nullish() }).parse(req.body);
+  const body = z.object({ calc: z.any().optional(), status: z.enum(['published', 'confirmed', 'draft', 'projected', 'unverified', 'placeholder']).optional(), notes: z.string().nullish(), effectiveTo: z.string().nullable().optional(), by: z.string().nullish() }).parse(req.body);
   // The rule's history names the signed-in person, not whatever the browser sends.
   const by = req.actor ? (req.user && req.user.id !== req.actor.id ? `${req.actor.email} as ${req.user.email}` : req.actor.email) : body.by ?? 'ui';
   await tx(async (c) => {
@@ -81,6 +81,7 @@ app.patch('/api/rules/:id', async (req) => {
 app.get('/api/coverage', async () => {
   const byState = await q(`select j.state, j.type, count(distinct j.code) jurisdictions, count(r.id) rules,
       count(r.id) filter (where r.status in ('published','draft')) verified,
+      count(r.id) filter (where r.status='confirmed') confirmed,
       count(r.id) filter (where r.status='unverified') unverified,
       count(r.id) filter (where r.status='projected') projected,
       count(r.id) filter (where r.status='placeholder') placeholder

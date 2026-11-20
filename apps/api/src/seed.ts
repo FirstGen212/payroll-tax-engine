@@ -16,17 +16,36 @@ export async function seed() {
     const order = ['federal', 'state', 'district', 'territory', 'county', 'city', 'township', 'school_district', 'psd', 'transit_district', 'special_district'];
     const js = [...db.jurisdictions].sort((a, b) => order.indexOf(a.type) - order.indexOf(b.type));
     for (const j of js) await c.query('insert into jurisdiction(code,name,type,parent_code,state,fips,flags,attrs,notes) values($1,$2,$3,$4,$5,$6,$7,$8,$9) on conflict(code) do update set name=excluded.name,type=excluded.type,parent_code=excluded.parent_code,state=excluded.state,fips=excluded.fips,flags=excluded.flags,attrs=excluded.attrs,notes=excluded.notes', [j.code, j.name, j.type, j.parent ?? null, j.state, j.fips ?? null, j.flags ?? [], j.attrs ?? LOCAL_ATTRS.get(j.code) ?? {}, j.notes ?? null]);
-    for (const r of db.rules) {
-      const prev = (await c.query('select calc, status, nonresident_calc from tax_rule where id=$1', [r.id])).rows[0];
-      await c.query(`insert into tax_rule(id,jurisdiction,kind,name,payer,wage_basis,effective_from,effective_to,status,calc,nonresident_calc,applies_to,optional,notes,updated_by)
-        values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'seed') on conflict(id) do update set jurisdiction=excluded.jurisdiction,kind=excluded.kind,name=excluded.name,payer=excluded.payer,wage_basis=excluded.wage_basis,effective_from=excluded.effective_from,effective_to=excluded.effective_to,status=excluded.status,calc=excluded.calc,nonresident_calc=excluded.nonresident_calc,applies_to=excluded.applies_to,optional=excluded.optional,notes=excluded.notes,updated_at=now(),updated_by='seed'`,
-        [r.id, r.jurisdiction, r.kind, r.name, r.payer, r.wageBasis, r.effectiveFrom, r.effectiveTo ?? null, r.status, JSON.stringify(r.calc), r.nonresidentCalc ? JSON.stringify(r.nonresidentCalc) : null, r.appliesTo ?? null, !!r.optional, r.notes ?? null]);
-      const after = { calc: r.calc, status: r.status, nonresident_calc: r.nonresidentCalc ?? null };
-      if (!prev || JSON.stringify({ calc: prev.calc, status: prev.status, nonresident_calc: prev.nonresident_calc }) !== JSON.stringify(after))
-        await c.query('insert into tax_rule_history(rule_id,changed_by,before,after) values($1,$2,$3,$4)', [r.id, 'seed', prev ?? null, after]);
-      await c.query('delete from tax_rule_source where rule_id=$1', [r.id]);
-      for (const s of r.sources) await c.query('insert into tax_rule_source values($1,$2) on conflict do nothing', [r.id, s]);
+    // Rules go in as one statement. A rule a person has edited in the app keeps their edit: only rows last written by the seed are refreshed.
+    const existing = new Map((await c.query('select id, calc, status, nonresident_calc, updated_by from tax_rule')).rows.map((r) => [r.id as string, r]));
+    const mine = (id: string) => { const e = existing.get(id); return !e || e.updated_by === null || e.updated_by === 'seed'; };
+    const rows = db.rules.filter((r) => mine(r.id)).map((r) => ({ id: r.id, jurisdiction: r.jurisdiction, kind: r.kind, name: r.name, payer: r.payer, wage_basis: r.wageBasis, effective_from: r.effectiveFrom, effective_to: r.effectiveTo ?? null, status: r.status, calc: r.calc, nonresident_calc: r.nonresidentCalc ?? null, applies_to: r.appliesTo ?? null, optional: !!r.optional, notes: r.notes ?? null }));
+    const history: { rule_id: string; before: unknown; after: unknown }[] = [];
+    for (const r of rows) {
+      const prev = existing.get(r.id);
+      const after = { calc: r.calc, status: r.status, nonresident_calc: r.nonresident_calc };
+      if (!prev || JSON.stringify({ calc: prev.calc, status: prev.status, nonresident_calc: prev.nonresident_calc }) !== JSON.stringify(JSON.parse(JSON.stringify(after))))
+        history.push({ rule_id: r.id, before: prev ? { calc: prev.calc, status: prev.status, nonresident_calc: prev.nonresident_calc } : null, after });
     }
+    await c.query(`insert into tax_rule(id,jurisdiction,kind,name,payer,wage_basis,effective_from,effective_to,status,calc,nonresident_calc,applies_to,optional,notes,updated_by)
+      select id,jurisdiction,kind,name,payer,wage_basis,effective_from,effective_to,status,calc,nonresident_calc,applies_to,optional,notes,'seed'
+      from jsonb_to_recordset($1::jsonb) as x(id text,jurisdiction text,kind text,name text,payer text,wage_basis text,effective_from date,effective_to date,status text,calc jsonb,nonresident_calc jsonb,applies_to text,optional boolean,notes text)
+      on conflict(id) do update set jurisdiction=excluded.jurisdiction,kind=excluded.kind,name=excluded.name,payer=excluded.payer,wage_basis=excluded.wage_basis,effective_from=excluded.effective_from,effective_to=excluded.effective_to,status=excluded.status,calc=excluded.calc,nonresident_calc=excluded.nonresident_calc,applies_to=excluded.applies_to,optional=excluded.optional,notes=excluded.notes,updated_at=case when tax_rule.calc is distinct from excluded.calc or tax_rule.status is distinct from excluded.status then now() else tax_rule.updated_at end,updated_by='seed'`,
+      [JSON.stringify(rows)]);
+    // A rule the seed wrote earlier and no longer produces (a renamed or replaced row) is removed, so two versions can never both apply.
+    const ids = db.rules.map((r) => r.id);
+    const stale = (await c.query("delete from tax_rule where updated_by = 'seed' and not (id = any($1::text[])) returning id, calc, status, nonresident_calc", [ids])).rows;
+    for (const r of stale) history.push({ rule_id: r.id, before: { calc: r.calc, status: r.status, nonresident_calc: r.nonresident_calc }, after: null });
+    if (history.length) await c.query("insert into tax_rule_history(rule_id,changed_by,before,after) select rule_id,'seed',before,after from jsonb_to_recordset($1::jsonb) as x(rule_id text,before jsonb,after jsonb)", [JSON.stringify(history)]);
+    const links = db.rules.filter((r) => mine(r.id)).flatMap((r) => r.sources.map((s) => ({ rule_id: r.id, source_id: s })));
+    await c.query('delete from tax_rule_source where rule_id = any($1::text[])', [rows.map((r) => r.id)]);
+    await c.query('insert into tax_rule_source select rule_id, source_id from jsonb_to_recordset($1::jsonb) as x(rule_id text, source_id text) on conflict do nothing', [JSON.stringify(links)]);
+    // A place the data no longer lists, with no rules left and nothing pointing at it, is dropped too.
+    await c.query(`delete from jurisdiction j where not (j.code = any($1::text[]))
+      and not exists (select 1 from tax_rule r where r.jurisdiction = j.code)
+      and not exists (select 1 from jurisdiction k where k.parent_code = j.code)`, [db.jurisdictions.map((j) => j.code)]);
+    const kept = db.rules.length - rows.length;
+    if (kept || stale.length) console.log(`seed: kept ${kept} rules edited in the app, removed ${stale.length} rules no longer in the data`);
     for (const r of RECIPROCITY) await c.query('insert into reciprocity_agreement values($1,$2,$3,$4,$5,$6,$7) on conflict(work_state,resident_state,effective_from) do update set form=excluded.form,status=excluded.status,notes=excluded.notes', [r.workState, r.residentState, r.form, r.effectiveFrom, r.effectiveTo ?? null, r.status, r.notes ?? null]);
     for (const e of EARNING_TYPES) await c.query('insert into earning_type values($1,$2,$3,$4,$5,$6,$7,$8,$9) on conflict(code) do update set name=excluded.name,category=excluded.category,cash=excluded.cash,supplemental=excluded.supplemental,taxability=excluded.taxability,state_overrides=excluded.state_overrides,w2=excluded.w2,notes=excluded.notes', [e.code, e.name, e.category, e.cash, e.supplemental, e.taxability, e.stateOverrides ?? null, e.w2 ?? null, e.notes ?? null]);
     for (const d of DEDUCTION_TYPES) await c.query('insert into deduction_type values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) on conflict(code) do update set name=excluded.name,category=excluded.category,reduces_wages=excluded.reduces_wages,state_overrides=excluded.state_overrides,limit_key=excluded.limit_key,catch_up_limit_key=excluded.catch_up_limit_key,sort_order=excluded.sort_order,employer_paid=excluded.employer_paid,w2=excluded.w2,notes=excluded.notes', [d.code, d.name, d.category, d.reducesWages, d.stateOverrides ?? null, d.limitKey ?? null, d.catchUpLimitKey ?? null, d.order, !!d.employerPaid, d.w2 ?? null, d.notes ?? null]);

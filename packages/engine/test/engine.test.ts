@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { calculatePay, learnVendorProfile, compareScenarios, runSeries } from '../src/index.js';
+import { calculatePay, computeStateCalc, learnVendorProfile, compareScenarios, runSeries } from '../src/index.js';
 import type { PayInput, PayResult } from '../src/index.js';
-import { loadTaxDatabase, STATES, ruleOn } from '@pte/tax-data';
+import { loadTaxDatabase, SOURCES, STATES, ruleOn } from '@pte/tax-data';
 
 const employer = { id: 'c1', name: 'Test Client', homeState: 'NY' };
 const base = (over: Partial<PayInput> = {}): PayInput => ({
@@ -139,9 +139,10 @@ describe('Multi-state rules', () => {
 });
 
 describe('State programs', () => {
-  it('CA SDI 1.3% with no wage cap', () => {
-    const r = calculatePay(base({ employee: { ...base().employee, residence: { state: 'CA' }, work: [{ state: 'CA', percent: 1 }], stateW4: { CA: {} } } }));
-    expect(tax(r, 'CA.SDI_EE')).toBe(39);
+  it('CA SDI follows the year: 1.3% in 2026, 1.4% in 2027, no wage cap', () => {
+    const ca = { ...base().employee, residence: { state: 'CA' }, work: [{ state: 'CA', percent: 1 }], stateW4: { CA: {} } };
+    expect(tax(calculatePay(base({ checkDate: '2026-06-15', employee: ca })), 'CA.SDI_EE')).toBe(39);
+    expect(tax(calculatePay(base({ employee: ca })), 'CA.SDI_EE')).toBe(42);
   });
   it('client SUI rate overrides the new-employer rate', () => {
     const r = calculatePay(base({ employer: { ...employer, suiRates: { TX: 0.01 } } }));
@@ -162,7 +163,7 @@ describe('State programs', () => {
 describe('Local taxes', () => {
   it('PA Act 32: withhold the higher of resident and work nonresident rate', () => {
     const r = calculatePay(base({ employee: { ...base().employee, residence: { state: 'PA', localCodes: ['PA-PSD-880000'] }, work: [{ state: 'PA', percent: 1, localCodes: ['PA-PSD-062801'] }], stateW4: { PA: {} } } }));
-    expect(tax(r, 'PA-PSD-880000.LIT_EE')).toBe(39); // 3,000 x 1.3% (Reading NR) > 0.5% resident
+    expect(tax(r, 'PA-PSD-880000.LIT_EE')).toBe(30); // 3,000 x 1.0% (Reading nonresident) > 0.5% resident
   });
   it('Pittsburgh LST is prorated per period', () => {
     const r = calculatePay(base({ employee: { ...base().employee, residence: { state: 'PA', localCodes: ['PA-PSD-700102'] }, work: [{ state: 'PA', percent: 1, localCodes: ['PA-PSD-700102', 'PA-PSD-700102-LST'] }], stateW4: { PA: {} } } }));
@@ -261,5 +262,76 @@ describe('Pay runs, scenarios and vendor learning', () => {
     const learned = learnVendorProfile('adp', samples);
     expect(learned.best.fitRounding).toBe('dollar');
     expect(learned.exactMatchRate).toBe(1);
+  });
+});
+
+describe('State formulas re-verified in November 2026', () => {
+  const sit = (state: string, w4: Record<string, unknown> = {}, amount = 3000, checkDate = '2026-10-16') =>
+    tax(calculatePay(base({ checkDate, earnings: [{ code: 'REG', amount }], employee: { ...base().employee, residence: { state }, work: [{ state, percent: 1 }], stateW4: { [state]: w4 } } })), `${state}.SIT`);
+  const direct = (state: string, w4: Record<string, unknown>, wages: number, annualFederalTax: number) =>
+    computeStateCalc(ruleOn(loadTaxDatabase(), state, 'SIT', '2026-10-16')!.calc, { state, wages, supplemental: 0, periods: 26, w4, federalW4: { version: '2020+', filingStatus: 'single' }, annualFederalTax, useFlatSupplemental: false }).amount;
+
+  it('Maine: standard deduction, then its phase-out above $102,250', () => {
+    // 78,000 - 12,850 = 65,150 -> 1,589.20 + 2,527.875 + 21.45 = 4,138.525 / 26, whole dollars
+    expect(sit('ME')).toBe(159);
+    // 130,000: deduction 12,850 x 47,250/75,000 = 8,095.50; tax 8,196.47 / 26
+    expect(sit('ME', {}, 5000)).toBe(315);
+  });
+  it('Kansas: $9,160 for the first two allowances when married, $2,320 after', () => {
+    // 78,000 - 18,320 - 2,320 = 57,360 -> 2,392 + 174.096
+    expect(sit('KS', { filingStatus: 'mfj', allowances: 3 })).toBe(98.7);
+  });
+  it('Wisconsin: the deduction shrinks as wages rise', () => {
+    expect(sit('WI', { allowances: 1 })).toBe(146.36); // deduction gone at 78,000
+    expect(sit('WI', { allowances: 1 }, 1000)).toBe(30.11); // 26,000: deduction 5,715.60
+  });
+  it('Rhode Island: no exemptions above $290,800', () => {
+    expect(sit('RI', { allowances: 2 })).toBe(109.62);
+    expect(sit('RI', { allowances: 2 }, 12000)).toBe(598.32);
+  });
+  it('South Carolina: the standard deduction needs at least one allowance', () => {
+    expect(sit('SC')).toBe(154.77);
+    expect(sit('SC', { allowances: 1 })).toBe(125.92);
+  });
+  it('North Carolina: 4.09% after a $12,750 deduction, whole dollars', () => {
+    expect(sit('NC')).toBe(103);
+  });
+  it('Oregon: federal tax subtraction, two tables split at $50,000', () => {
+    // 39,000 - 3,000 - 2,910 = 33,090 -> 263 + 216.125 + 462.375 + 1,897.875 - 263 credit = 2,576.375 / 26
+    expect(direct('OR', { allowances: 1 }, 1500, 3000)).toBe(99);
+    // 78,000 - 8,750 (cap) - 2,910 = 66,340 -> 678 + 4,807.25 - 263 = 5,222.25 / 26
+    expect(direct('OR', { allowances: 1 }, 3000, 9000)).toBe(201);
+  });
+  it('Alabama: deduction steps down from $26,000 of wages', () => {
+    // 78,000 - 2,500 - 1,500 - 8,000 federal = 66,000 -> 10 + 100 + 3,150 = 3,260 / 26
+    expect(direct('AL', {}, 3000, 8000)).toBeCloseTo(125.38, 2);
+    // 27,000: third band, deduction 2,925 -> 27,000 - 2,925 - 1,500 = 22,575 -> 110 + 978.75
+    expect(direct('AL', {}, 27000 / 26, 0)).toBeCloseTo(1088.75 / 26, 2);
+  });
+  it('Philadelphia uses the rate for the date', () => {
+    const db = loadTaxDatabase();
+    expect((ruleOn(db, 'PA-PHILADELPHIA', 'LIT_EE', '2026-03-01')!.calc as any).rate).toBeCloseTo(0.0374);
+    expect((ruleOn(db, 'PA-PHILADELPHIA', 'LIT_EE', '2026-08-01')!.calc as any).rate).toBeCloseTo(0.03735);
+  });
+});
+
+describe('Every rule in the data', () => {
+  const db = loadTaxDatabase();
+  it('has a unique id and cites sources that exist', () => {
+    const known = new Set(SOURCES.map((s) => s.id));
+    expect(new Set(db.rules.map((r) => r.id)).size).toBe(db.rules.length);
+    expect(db.rules.flatMap((r) => r.sources.filter((s) => !known.has(s)).map((s) => `${r.id}: ${s}`))).toEqual([]);
+  });
+  it('never overlaps another rule for the same tax', () => {
+    const groups = new Map<string, typeof db.rules>();
+    for (const r of db.rules) groups.set(`${r.jurisdiction}|${r.kind}|${r.name}`, [...(groups.get(`${r.jurisdiction}|${r.kind}|${r.name}`) ?? []), r]);
+    const clashes: string[] = [];
+    for (const rs of groups.values()) for (let i = 0; i < rs.length; i++) for (let j = i + 1; j < rs.length; j++)
+      if (rs[i].effectiveFrom <= (rs[j].effectiveTo ?? '9999') && rs[j].effectiveFrom <= (rs[i].effectiveTo ?? '9999')) clashes.push(`${rs[i].id} / ${rs[j].id}`);
+    expect(clashes).toEqual([]);
+  });
+  it('is only called confirmed when an outside source is named', () => {
+    const inside = (s: string) => s === 'research-memory-2026' || s.endsWith('-agency') || s.endsWith('-local') || s === 'dol-sui-comparison';
+    expect(db.rules.filter((r) => r.status === 'confirmed' && r.sources.every(inside)).map((r) => r.id)).toEqual([]);
   });
 });

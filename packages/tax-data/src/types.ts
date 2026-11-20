@@ -10,6 +10,8 @@
 export type VerificationStatus =
   /** Matches a final, published agency document we cited. */
   | 'published'
+  /** Matches a recognized compilation that cites the agency (EY, PayrollOrg, USDA NFC, Mercer); the agency document itself was not read. */
+  | 'confirmed'
   /** Matches a draft agency document (e.g. IRS draft Pub 15-T). */
   | 'draft'
   /** Carried forward or estimated because the agency has not published the year yet. */
@@ -146,8 +148,18 @@ export interface StateFormula {
   brackets: ByStatus<Bracket[]>;
   /** Standard deduction subtracted from annual wages. Either a fixed amount or a percentage with min/max. */
   standardDeduction?: ByStatus<number | { pct: number; min: number; max: number }>;
+  /** The standard deduction shrinks in a straight line to zero between `start` and `end` of annual wages (Maine). */
+  standardDeductionPhaseOut?: ByStatus<{ start: number; end: number }>;
+  /** The standard deduction is reduced by `rate` times annual wages over `start`, not below zero (Wisconsin). */
+  standardDeductionSlide?: ByStatus<{ start: number; rate: number }>;
+  /** The standard deduction applies only when at least one allowance is claimed (South Carolina). */
+  standardDeductionNeedsAllowance?: boolean;
   /** Deduction per withholding allowance / exemption claimed. */
   allowanceDeduction?: number;
+  /** The first `count` allowances are worth `amount` each instead of `allowanceDeduction` (Kansas, Massachusetts style). */
+  allowanceTiers?: ByStatus<{ amount: number; count: number }>;
+  /** No allowance deduction once annual wages exceed this (Rhode Island). */
+  allowanceNoneAbove?: number;
   /** Deduction by filing status (personal exemption), applied in addition to allowances. */
   personalExemption?: ByStatus<number>;
   /** Tax credit per allowance (subtracted from computed annual tax). */

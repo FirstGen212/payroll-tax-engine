@@ -127,6 +127,6 @@ export const FEDERAL_RULES: TaxRule[] = [
 export const FUTA_CREDIT_REDUCTION: Record<number, { rates: Record<string, number>; status: 'published' | 'projected' | 'unverified'; notes?: string }> = {
   2024: { rates: { CA: 0.009, VI: 0.042 }, status: 'unverified' },
   2025: { rates: { CA: 0.012, VI: 0.045 }, status: 'unverified' },
-  2026: { rates: { CA: 0.015, VI: 0.048 }, status: 'projected', notes: 'Projected: CA and USVI had outstanding Title XII loans; +0.3% per year if loans remain. Replace with DOL final list (Nov 2026).' },
-  2027: { rates: { CA: 0.018, VI: 0.051 }, status: 'projected', notes: 'Projection only. Final list published by DOL in Nov 2027.' },
+  2026: { rates: { CA: 0.015 }, status: 'published', notes: 'Final US DOL determination of November 10, 2026: California 1.5%. The US Virgin Islands repaid its federal loans and has no reduction for 2026.' },
+  2027: { rates: { CA: 0.018 }, status: 'projected', notes: 'Projection only: California adds 0.3 points a year while its federal loan is outstanding. The final list is published by US DOL in November 2027.' },
 };

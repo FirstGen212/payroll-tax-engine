@@ -32,29 +32,29 @@ export default function Research() {
   const perState = useMemo(() => {
     const m: Record<string, any> = {};
     for (const r of cov?.byState ?? []) {
-      m[r.state] ??= { jurisdictions: 0, rules: 0, verified: 0, unverified: 0, projected: 0, placeholder: 0 };
-      for (const k of ['jurisdictions', 'rules', 'verified', 'unverified', 'projected', 'placeholder']) m[r.state][k] += Number(r[k]);
+      m[r.state] ??= { jurisdictions: 0, rules: 0, verified: 0, confirmed: 0, unverified: 0, projected: 0, placeholder: 0 };
+      for (const k of ['jurisdictions', 'rules', 'verified', 'confirmed', 'unverified', 'projected', 'placeholder']) m[r.state][k] += Number(r[k]);
     }
     return m;
   }, [cov]);
   return (
     <>
       <PageHead eyebrow="Tax database" title="Rules by state and status">
-        {cov ? <><b>{Object.values(cov.totals).reduce((a: number, n: any) => a + Number(n), 0)}</b> tax rules, of which <b>{(cov.totals.published ?? 0) + (cov.totals.draft ?? 0)}</b> match an agency publication or draft and <b>{cov.totals.unverified ?? 0}</b> still need checking against the agency source.</> : 'Loading coverage…'}
+        {cov ? <><b>{Object.values(cov.totals).reduce((a: number, n: any) => a + Number(n), 0)}</b> tax rules, of which <b>{(cov.totals.published ?? 0) + (cov.totals.draft ?? 0)}</b> match an agency publication or draft, <b>{cov.totals.confirmed ?? 0}</b> match a recognized compilation and <b>{cov.totals.unverified ?? 0}</b> still need checking against a source.</> : 'Loading coverage…'}
       </PageHead>
-      {cov && <div className="kpis">{['published', 'draft', 'projected', 'unverified', 'placeholder'].map((s) => <div key={s} className="kpi"><div className="l"><Badge s={s} /></div><div className="v">{cov.totals[s] ?? 0}</div></div>)}</div>}
+      {cov && <div className="kpis">{['published', 'confirmed', 'draft', 'projected', 'unverified', 'placeholder'].map((s) => <div key={s} className="kpi"><div className="l"><Badge s={s} /></div><div className="v">{cov.totals[s] ?? 0}</div></div>)}</div>}
       <div className="panel">
-        <p className="muted small">Status meanings: <b>published</b> matches a final agency document; <b>draft</b> matches an agency draft (IRS draft Pub 15-T 2027); <b>projected</b> is carried forward or estimated because the agency has not published the year; <b>unverified</b> was entered from research and must be checked against the cited agency source before live payroll; <b>placeholder</b> is structure only.</p>
+        <p className="muted small">Status meanings: <b>published</b> matches a final agency document that was read directly; <b>confirmed</b> matches a recognized compilation that cites the agency (the federal payroll center's state bulletins, EY, Mercer), but the agency document itself was not read; <b>draft</b> matches an agency draft (IRS draft Pub 15-T 2027); <b>projected</b> is carried forward or estimated because the agency has not published the year; <b>unverified</b> was entered from research and must be checked against the cited agency source before live payroll; <b>placeholder</b> is structure only.</p>
         <details><summary>Coverage by state / territory</summary>
-          <table><thead><tr><th>State</th><th className="num">Jurisdictions</th><th className="num">Rules</th><th className="num">Published/draft</th><th className="num">Unverified</th><th className="num">Projected</th><th className="num">Placeholder</th></tr></thead>
-            <tbody>{Object.entries(perState).map(([s, v]: any) => <tr key={s}><td><a href="#" onClick={(e) => { e.preventDefault(); setState(s); }}>{s}</a></td><td className="num">{v.jurisdictions}</td><td className="num">{v.rules}</td><td className="num">{v.verified}</td><td className="num">{v.unverified}</td><td className="num">{v.projected}</td><td className="num">{v.placeholder}</td></tr>)}</tbody></table>
+          <table><thead><tr><th>State</th><th className="num">Jurisdictions</th><th className="num">Rules</th><th className="num">Published/draft</th><th className="num">Confirmed</th><th className="num">Unverified</th><th className="num">Projected</th><th className="num">Placeholder</th></tr></thead>
+            <tbody>{Object.entries(perState).map(([s, v]: any) => <tr key={s}><td><a href="#" onClick={(e) => { e.preventDefault(); setState(s); }}>{s}</a></td><td className="num">{v.jurisdictions}</td><td className="num">{v.rules}</td><td className="num">{v.verified}</td><td className="num">{v.confirmed}</td><td className="num">{v.unverified}</td><td className="num">{v.projected}</td><td className="num">{v.placeholder}</td></tr>)}</tbody></table>
         </details>
       </div>
       <div className="panel">
         <div className="row">
           <label>State / territory<StateSelect value={state} onChange={setState} /></label>
           <label>Effective on<input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
-          <label>Status<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">All</option>{['published', 'draft', 'projected', 'unverified', 'placeholder'].map((s) => <option key={s}>{s}</option>)}</select></label>
+          <label>Status<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">All</option>{['published', 'confirmed', 'draft', 'projected', 'unverified', 'placeholder'].map((s) => <option key={s}>{s}</option>)}</select></label>
         </div>
         <table style={{ marginTop: 12 }}>
           <thead><tr><th>Jurisdiction</th><th>Tax</th><th>Payer</th><th>Calculation</th><th>Effective</th><th>Status</th><th>Sources / notes</th></tr></thead>
