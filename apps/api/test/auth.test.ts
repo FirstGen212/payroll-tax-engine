@@ -153,6 +153,7 @@ describe('permission rules', () => {
     const rules: [string, string, string | null][] = [
       ['GET', '/api/reference', null], ['GET', '/api/jurisdictions', null], ['GET', '/api/rules', null], ['GET', '/api/rules/:id/history', null], ['GET', '/api/coverage', null],
       ['PATCH', '/api/rules/:id', 'rules.edit'],
+      ['GET', '/api/multiples', null], ['PUT', '/api/multiples/:id', 'rules.edit'], ['POST', '/api/multiples/:id/reset', 'rules.edit'],
       ['GET', '/api/clients', 'clients.view'], ['POST', '/api/clients', 'clients.edit'], ['GET', '/api/clients/:id', 'clients.view'], ['PUT', '/api/clients/:id', 'clients.edit'],
       ['POST', '/api/clients/:id/locations', 'clients.edit'], ['PUT', '/api/clients/:id/tax-settings', 'clients.edit'], ['GET', '/api/clients/:id/applicable-taxes', 'clients.view'],
       ['GET', '/api/clients/:id/employees', 'clients.view'], ['POST', '/api/clients/:id/employees', 'clients.edit'], ['GET', '/api/employees/:id', 'clients.view'], ['PUT', '/api/employees/:id', 'clients.edit'],

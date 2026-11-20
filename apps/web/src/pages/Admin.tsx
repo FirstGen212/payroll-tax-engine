@@ -13,7 +13,7 @@ const AUDIT_LABELS: Record<string, string> = {
   'POST /api/proposals': 'Created proposal', 'PUT /api/proposals/:id': 'Saved proposal', 'POST /api/proposals/:id/recalculate': 'Recalculated proposal', 'POST /api/proposals/:id/duplicate': 'Copied proposal',
   'POST /api/clients': 'Added client', 'PUT /api/clients/:id': 'Changed client', 'POST /api/clients/:id/locations': 'Added work location', 'PUT /api/clients/:id/tax-settings': 'Changed client tax setup',
   'POST /api/clients/:id/employees': 'Added employee', 'PUT /api/employees/:id': 'Changed employee', 'POST /api/clients/:id/payruns': 'Saved pay run',
-  'PATCH /api/rules/:id': 'Changed tax rule', 'POST /api/vendor-profiles/:id/samples': 'Uploaded vendor sample', 'POST /api/vendor-profiles/:id/learn': 'Learned vendor profile',
+  'PATCH /api/rules/:id': 'Changed tax rule', 'multiple.edit': 'Changed valuation multiple', 'multiple.reset': 'Reset valuation multiple', 'POST /api/vendor-profiles/:id/samples': 'Uploaded vendor sample', 'POST /api/vendor-profiles/:id/learn': 'Learned vendor profile',
 };
 /** Who or what the row is about: a name where the log has one, otherwise the code in the request path (a tax rule or vendor id). */
 const auditTarget = (r: any): string => {

@@ -155,7 +155,7 @@ export function ReportView({ r, preview }: { r: any; preview?: boolean }) {
           <div className="fg-card">
             <h3>Valuation impact</h3>
             <div className="fg-num">{whole(r.valuationIncrease)}</div>
-            <p className="fg-note" style={{ marginBottom: 0 }}>Based on a <b>{r.ebitdaMultiple}x</b> EBITDA multiple, this is the potential increase in business value from the added annual earnings.</p>
+            <p className="fg-note" style={{ marginBottom: 0 }}>Based on a <b>{r.ebitdaMultiple}x</b> EBITDA multiple, this is the potential increase in business value from the added annual earnings.{r.multipleNote ? ` ${r.multipleNote}` : ''}</p>
           </div>
         )}
       </section>

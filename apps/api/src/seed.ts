@@ -5,6 +5,7 @@
 import { BENEFIT_LIMITS, DEDUCTION_TYPES, EARNING_TYPES, LOCAL_ATTRS, RECIPROCITY, RETIREMENT_SYSTEMS, SOURCES, VENDOR_PROFILES, loadTaxDatabase } from '@pte/tax-data';
 import { pool, tx } from './db.js';
 import { migrate } from './migrate.js';
+import { seedMultiples } from './proposals/multiples.js';
 
 export async function seed() {
   await migrate();
@@ -33,6 +34,7 @@ export async function seed() {
     for (const r of RETIREMENT_SYSTEMS) await c.query('insert into retirement_system values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) on conflict(code) do update set name=excluded.name,member_rate=excluded.member_rate,employer_rate=excluded.employer_rate,pickup_414h=excluded.pickup_414h,ss_covered=excluded.ss_covered,status=excluded.status,notes=excluded.notes', [r.code, r.name, r.state, r.memberRate, r.employerRate ?? null, r.pickup414h, String(r.socialSecurityTypicallyCovered), r.effectiveFrom, r.status, r.notes ?? null]);
     for (const v of VENDOR_PROFILES) await c.query("insert into vendor_profile(id,name,status,conventions,notes) values($1,$2,$3,$4,$5) on conflict(id) do update set name=excluded.name, notes=excluded.notes, conventions=case when vendor_profile.status='assumed' then excluded.conventions else vendor_profile.conventions end", [v.id, v.name, v.status, v.conventions, v.notes ?? null]);
   });
+  await seedMultiples();
   const counts = (await pool.query('select (select count(*) from jurisdiction) j, (select count(*) from tax_rule) r, (select count(*) from tax_source) s')).rows[0];
   console.log(`seeded ${counts.j} jurisdictions, ${counts.r} tax rules, ${counts.s} sources`);
 }

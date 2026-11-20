@@ -8,7 +8,8 @@ import { randomBytes } from 'node:crypto';
 import type { FastifyRequest } from 'fastify';
 import { q } from '../db.js';
 import { audit, can } from '../auth.js';
-import { DEFAULT_REPORT_SETTINGS, ReportSettingsIn, buildSnapshot, explanationOf, mergeReportSettings, newSlug } from './report.js';
+import { industryLabel, pickMultiple, sizeLabel } from './multiples-data.js';
+import { DEFAULT_REPORT_SETTINGS, multipleNote, ReportSettingsIn, buildSnapshot, explanationOf, mergeReportSettings, newSlug } from './report.js';
 import { getTaxDb } from '../taxdb.js';
 import { parseWorkbook } from './parse.js';
 
@@ -54,11 +55,26 @@ async function vendorConventions(id?: string) {
   return v?.conventions;
 }
 
+/**
+ * Fill in the EBITDA multiple from the multiples table for the proposal's industry, ownership and company size.
+ * Left alone when the reviewer typed their own multiple or the industry is not in the table.
+ */
+export async function withTableMultiple(settings: Partial<ProposalSettings>): Promise<Partial<ProposalSettings>> {
+  const { multipleInfo: _old, ...rest } = settings;
+  if (rest.multipleAuto === false || !industryLabel(rest.industry)) return rest;
+  const rows = await q<{ industry: string; ownership: string; sizeBand: string; multiple: number; basis: any; source: string; asOf: string | null; method: string | null }>(
+    'select industry, ownership, size_band as "sizeBand", multiple::float8 as multiple, basis, source, as_of as "asOf", method from valuation_multiple where industry=$1', [rest.industry]);
+  const row = pickMultiple(rows ?? [], rest.industry, rest.ownership, rest.companySize);
+  if (!row) return rest;
+  const ownership = rest.ownership ?? 'private';
+  return { ...rest, ebitdaMultiple: row.multiple, multipleInfo: { industry: industryLabel(rest.industry)!, size: row.sizeBand === 'all' ? null : sizeLabel(row.sizeBand)?.short ?? null, ownership, basis: row.basis, source: row.source, asOf: row.asOf, method: row.method } };
+}
+
 export async function calculate(body: z.infer<typeof Calc>): Promise<ProposalResult & { unmatchedMunicipalities: string[] }> {
   const db = await getTaxDb();
   const rows = rowsFromSheet(body.rows, body.mapping as any);
   matchLocals(rows, db);
-  const settings = body.settings as Partial<ProposalSettings>;
+  const settings = await withTableMultiple(body.settings as Partial<ProposalSettings>);
   const conventions = await vendorConventions(settings.vendorProfileId);
   const result = runProposal(rows, { ...settings, conventions }, db);
   const unmatched = [...new Set(rows.filter((r) => r.municipality && !r.localCodes).map((r) => `${r.workState ?? ''} ${r.municipality}`))];
@@ -155,6 +171,7 @@ export async function exportWorkbook(name: string, headers: string[], rawRows: R
     ['Employer annual tax savings', s.employerAnnualSavings.total],
     ['Employer savings per employee', s.employerAnnualSavings.perEmployee],
     [`Valuation increase (${result.settings.ebitdaMultiple}x EBITDA)`, s.valuationIncrease],
+    ...(multipleNote(result.settings.multipleInfo) ? [['Multiple', multipleNote(result.settings.multipleInfo)]] : []),
     [],
     ['Program price', 'Eligible', 'Monthly revenue', 'Benefit cost', 'Monthly margin', 'Margin %', '12-month margin'],
     ...s.programs.map((p) => [p.price, p.eligible, p.monthlyRevenue, p.monthlyBenefitCost, p.monthlyMargin, p.marginPercent, p.annualMargin]),

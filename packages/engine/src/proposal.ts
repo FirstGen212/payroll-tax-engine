@@ -134,8 +134,15 @@ export interface ProposalSettings {
   benefitPaybackPercent: number;
   /** EBITDA multiple for the valuation-increase estimate. */
   ebitdaMultiple: number;
+  /** Industry key from the valuation multiples table (older proposals hold free text, which matches nothing). */
   industry?: string;
   ownership?: 'private' | 'public';
+  /** Company size band (enterprise value) from the multiples table; 'all' or empty uses the industry average. */
+  companySize?: string;
+  /** False when the reviewer typed their own multiple, so the table no longer fills it in. */
+  multipleAuto?: boolean;
+  /** Where the multiple came from, filled in by the server when it is taken from the table. */
+  multipleInfo?: { industry: string; size: string | null; ownership: 'private' | 'public'; basis: 'published' | 'derived' | 'custom'; source: string; asOf: string | null; method: string | null };
   /** Hours assumed for salaried rows with no hours. */
   salariedHoursPerWeek: number;
   /** Gross values at or above this are treated as annual and divided by periods. */
@@ -176,7 +183,9 @@ export const DEFAULT_PROPOSAL_SETTINGS: ProposalSettings = {
   employerSavingsBasis: 'fica',
   benefitPaybackPercent: 1,
   ebitdaMultiple: 5.2,
-  industry: 'Energy (Oil & Gas)',
+  industry: '',
+  companySize: 'all',
+  multipleAuto: true,
   ownership: 'private',
   salariedHoursPerWeek: 40,
   annualGrossThreshold: 20000,

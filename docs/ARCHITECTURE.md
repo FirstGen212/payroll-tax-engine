@@ -40,6 +40,16 @@ Each employee result carries a `cause` (the first rule that failed, in the order
 
 Publishing writes a `proposal_report` row: a slug (`<company>-<16 hex>`) and a **snapshot** built by `buildSnapshot` in `apps/api/src/proposals/report.ts` from the saved numbers and the proposal's page settings. `GET /api/public/reports/:slug` returns only that snapshot, so later edits never change a link that was sent, and nothing but what the page shows leaves the app. Revoking sets `revoked_at`; the link then answers 404. Links do not expire on their own. The snapshot lists every employee except rows the reviewer left out, which are also taken out of its headcount; amounts are included only for people on a plan.
 
+## Valuation multiples
+
+The valuation increase on a proposal is employer savings times an EBITDA multiple. The multiple comes from the `valuation_multiple` table (migration 005), seeded at start from `apps/api/src/proposals/multiples-data.ts`.
+
+- **Private companies:** GF Data (ACG) averages of enterprise value to adjusted EBITDA on private-equity deals. The industry average ("any size") is the published figure for the closest of GF Data's eight groups. GF Data does not publish industry by size, so each size cell is calculated: the all-industry average for that size, times the industry group average, divided by the all-deal average. Those cells have basis `derived` and keep the sum in `method`. The two bands under $10M use first half 2025 figures reported second hand.
+- **Public companies:** NYU Stern (Damodaran) EV/EBITDA by US industry, firms with positive EBITDA, January 2026. Not split by size.
+- **Company size** is enterprise value, because that is how the deal data is grouped.
+- Every row keeps its source, date and basis (`published`, `derived`, `custom`). Nothing is invented. An edit (`PUT /api/multiples/:id`, permission `rules.edit`) marks the cell `custom` and keeps the sourced figure so it can be reset. Re-seeding never overwrites an edited cell.
+- At calculation the server fills the multiple in from the proposal's industry, ownership and size (`withTableMultiple`) and records where it came from in `settings.multipleInfo`. A multiple the reviewer typed (`multipleAuto: false`) or an industry that is not in the table (older proposals) is left alone. The client page and the export show one line on the source.
+
 ## Vendor learning
 
 `learnVendorProfile(vendor, samples)` runs each sample paycheck through every combination of conventions in `CONVENTION_SEARCH_SPACE` and keeps the combination with the smallest total difference from the provider's actual tax amounts. It reports per-dimension evidence and the residual lines no convention explains, which point to setup differences (wrong SUI rate, missing local, W-4 data).

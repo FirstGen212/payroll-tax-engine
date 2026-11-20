@@ -5,6 +5,7 @@ import { PageHead, StateSelect, useReference } from '../components';
 import { useCan } from '../auth';
 import { PROPOSAL_STATUSES, StatusPill } from './Proposals';
 import { ReportView } from './Report';
+import { BASIS_WORD, pickMultiple, type MultiplesData } from './Multiples';
 
 const FIELD_LABELS: Record<string, string> = {
   company: 'Company Name', employeeId: 'Employee ID', firstName: 'First Name', lastName: 'Last Name', workState: 'Work State', residenceState: 'Residence State',
@@ -286,6 +287,16 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
       .sort((a: any, b: any) => { const x = getter(a), y = getter(b); return (x === y ? 0 : x === undefined ? 1 : y === undefined ? -1 : x > y ? 1 : -1) * sort.d; });
   }, [result, filter, stateF, search, sort]);
   useEffect(() => setPage(0), [filter, stateF, search, sort]);
+  // Valuation: the multiple follows the industry, ownership and size unless the reviewer typed their own.
+  const [multiples, setMultiples] = useState<MultiplesData>();
+  useEffect(() => { api('/multiples').then(setMultiples).catch(() => undefined); }, []);
+  const industries = multiples?.industries ?? [];
+  const typical = pickMultiple(multiples?.rows ?? [], settings.industry, settings.ownership ?? 'private', settings.companySize);
+  const setValuation = (p: any) => {
+    const next = { ...settings, ...p };
+    const row = pickMultiple(multiples?.rows ?? [], next.industry, next.ownership ?? 'private', next.companySize);
+    setS({ ...p, multipleAuto: true, ...(row ? { ebitdaMultiple: row.multiple } : {}) });
+  };
   const pageRows = shown.slice(page * 25, page * 25 + 25);
   const pages = Math.max(1, Math.ceil(shown.length / 25));
   const tot = (f: (e: any) => number | undefined) => shown.reduce((a: number, e: any) => a + (f(e) ?? 0), 0);
@@ -311,12 +322,24 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
           {busy && <span className="muted small">{busy}</span>}
         </div>
         <div className="row" style={{ marginTop: 10, alignItems: 'flex-end' }}>
-          <label>EBITDA industry<input value={settings.industry ?? ''} onChange={(e) => setS({ industry: e.target.value })} /></label>
-          <div className="seg">{['private', 'public'].map((o) => <button key={o} className={settings.ownership === o ? 'on' : ''} onClick={() => setS({ ownership: o })}>{o[0].toUpperCase() + o.slice(1)}</button>)}</div>
-          <label>Multiple (x)<input style={{ width: 80 }} type="number" step="0.1" value={settings.ebitdaMultiple} onChange={(e) => setS({ ebitdaMultiple: Number(e.target.value) })} /></label>
+          <label>Industry<select value={industries.some((i) => i.key === settings.industry) ? settings.industry : ''} onChange={(e) => setValuation({ industry: e.target.value })}>
+            <option value="">Choose an industry</option>
+            {industries.map((i) => <option key={i.key} value={i.key}>{i.label}</option>)}
+          </select></label>
+          <div className="seg">{['private', 'public'].map((o) => <button key={o} className={(settings.ownership ?? 'private') === o ? 'on' : ''} onClick={() => setValuation({ ownership: o })}>{o[0].toUpperCase() + o.slice(1)}</button>)}</div>
+          <label>Company size<select value={settings.ownership === 'public' ? 'all' : settings.companySize || 'all'} disabled={settings.ownership === 'public'} title={settings.ownership === 'public' ? 'Public company figures are not split by size' : undefined} onChange={(e) => setValuation({ companySize: e.target.value })}>
+            {(multiples?.sizes ?? [{ key: 'all', label: 'Any size (industry average)' }]).map((z: any) => <option key={z.key} value={z.key}>{z.label}</option>)}
+          </select></label>
+          <label>Multiple (x)<input style={{ width: 80 }} type="number" step="0.1" value={settings.ebitdaMultiple} onChange={(e) => setS({ ebitdaMultiple: Number(e.target.value), multipleAuto: false })} /></label>
           <label>Savings / employee<input style={{ width: 120 }} readOnly value={money(s.employerAnnualSavings.perEmployee)} /></label>
           {settings.ebitdaMultiple !== result.settings.ebitdaMultiple && <span className="muted small">Recalculate to apply the new multiple.</span>}
         </div>
+        <p className="muted small" style={{ margin: '8px 0 0' }}>
+          {typical && settings.multipleAuto !== false && <>Filled in from the multiples table: <b>{typical.multiple.toFixed(1)}x</b> is typical for {settings.ownership ?? 'private'} companies in this industry{typical.sizeBand !== 'all' ? ' at this size' : ''}. {BASIS_WORD[typical.basis]}. </>}
+          {typical && settings.multipleAuto === false && <>You typed this multiple. The table has <b>{typical.multiple.toFixed(1)}x</b> for this industry and size. <button className="small" onClick={() => setS({ ebitdaMultiple: typical.multiple, multipleAuto: true })}>Use {typical.multiple.toFixed(1)}x</button> </>}
+          {!typical && <>Choose an industry to fill in the typical multiple. Until then the multiple is the one typed here. </>}
+          <Link to="/multiples">See the multiples table</Link>
+        </p>
       </div>
 
       {view === 'results' && (

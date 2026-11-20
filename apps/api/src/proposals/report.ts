@@ -1,6 +1,6 @@
 /** The client-facing proposal page: its editable settings and the snapshot a published link shows. */
 import { z } from 'zod';
-import type { EmployeeExplanation, ProposalEmployeeResult, ProposalSummary } from '@pte/engine';
+import type { EmployeeExplanation, ProposalEmployeeResult, ProposalSettings, ProposalSummary } from '@pte/engine';
 
 export interface ReportSettings {
   title?: string;
@@ -96,6 +96,15 @@ export function explanationOf(e: ProposalEmployeeResult): EmployeeExplanation {
   return { status: 'Not eligible', tone: 'notEligible', headline: reviewer ? 'Left out after review' : el.replace(/^Not Eligible - /, ''), reason: reviewer ? 'Left out after a review of their details.' : e.reasons?.[0] ?? '', suggestions: [] };
 }
 
+/** One line on where the multiple came from, e.g. "Typical for private companies (Home care and home health, $10M to $25M in value). Calculated from GF Data averages." */
+export function multipleNote(info?: ProposalSettings['multipleInfo']): string {
+  if (!info) return '';
+  const detail = [info.industry === 'Other or not listed' ? 'all industries' : info.industry, info.size ? `${info.size} in value` : ''].filter(Boolean).join(', ');
+  const publisher = info.source.split(/[,;(]/)[0].trim();
+  const how = info.basis === 'custom' ? "First Gen's own figure." : info.basis === 'derived' ? `Calculated from ${publisher} averages.` : `Source: ${publisher}.`;
+  return `Typical for ${info.ownership} companies (${detail}). ${how}`;
+}
+
 const TONE_ORDER = { eligible: 0, partTime: 0, review: 1, notEligible: 2 } as const;
 
 /** Freeze what the client sees. Later edits to the proposal don't change a link that was already sent. */
@@ -126,6 +135,7 @@ export function buildSnapshot(p: { name: string; company?: string | null; file_n
     generatedAt: new Date().toISOString(),
     planYear: p.settings?.year,
     ebitdaMultiple: p.settings?.ebitdaMultiple,
+    multipleNote: multipleNote(p.settings?.multipleInfo),
     employerAnnualSavings: s.employerAnnualSavings.total,
     valuationIncrease: s.valuationIncrease,
     perPeriodSavings: Math.round((s.employerAnnualSavings.total / periods) * 100) / 100,

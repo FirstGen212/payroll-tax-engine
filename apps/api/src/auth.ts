@@ -22,7 +22,7 @@ export const PERMISSIONS: { key: string; label: string; group: string }[] = [
   { key: 'clients.edit', label: 'Add and change clients, locations, employees and tax setup', group: 'Clients and payroll' },
   { key: 'payroll.run', label: 'Run and save pay runs', group: 'Clients and payroll' },
   { key: 'vendors.edit', label: 'Upload samples and learn vendor profiles', group: 'Clients and payroll' },
-  { key: 'rules.edit', label: 'Change tax rules and their verification status', group: 'Clients and payroll' },
+  { key: 'rules.edit', label: 'Change tax rules, their verification status and the valuation multiples', group: 'Clients and payroll' },
   { key: 'proposals.view', label: 'See their own proposals', group: 'Proposals' },
   { key: 'proposals.edit', label: 'Create, recalculate and change proposals', group: 'Proposals' },
   { key: 'proposals.view_all', label: "See and work on everyone's proposals", group: 'Proposals' },
@@ -138,6 +138,7 @@ export function requiredPermission(method: string, route: string): string | null
   if (/^\/api\/clients\/[^/]+\/payruns/.test(route) && write) return 'payroll.run';
   if (route.startsWith('/api/clients') || route.startsWith('/api/employees') || route.startsWith('/api/payruns')) return write ? 'clients.edit' : 'clients.view';
   if (route.startsWith('/api/rules') && write) return 'rules.edit';
+  if (route.startsWith('/api/multiples') && write) return 'rules.edit'; // reading the table is open to any signed-in user
   if (!write || CALCULATE_ONLY.has(route)) return null; // reference data, rules, calculator
   return NO_RULE;
 }

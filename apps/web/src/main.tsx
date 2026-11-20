@@ -10,6 +10,7 @@ import PayRunView from './pages/PayRunView';
 import Research from './pages/Research';
 import Calculator from './pages/Calculator';
 import Vendors from './pages/Vendors';
+import Multiples from './pages/Multiples';
 import Proposals from './pages/Proposals';
 import ProposalBuilder from './pages/ProposalBuilder';
 import Admin from './pages/Admin';
@@ -40,6 +41,7 @@ const NAV: [string, string, string, boolean, string[]][] = [
   ['/proposals', 'Proposals', 'M4 20V10M10 20V4M16 20v-7M22 20H2', false, ['proposals.view']],
   ['/calculator', 'Paycheck calculator', 'M6 2h12a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zM8 6h8M8 11h.01M12 11h.01M16 11h.01M8 15h.01M12 15h.01M16 15h.01M8 19h8', false, []],
   ['/research', 'Tax database', 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6', false, []],
+  ['/multiples', 'Valuation multiples', 'M3 3v18h18M7 15l4-5 3 3 5-7', false, ['proposals.view']],
   ['/vendors', 'Vendor profiles', 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8', false, ['clients.view']],
   ['/admin', 'Admin', 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z', false, ['users.manage', 'audit.view']],
 ];
@@ -134,6 +136,7 @@ function Shell() {
             <Route path="/calculator" element={<Calculator />} />
             <Route path="/research" element={<Research />} />
             <Route path="/vendors" element={<Vendors />} />
+            <Route path="/multiples" element={<Multiples />} />
             <Route path="/admin" element={has(['users.manage', 'audit.view']) ? <Admin /> : <p className="muted">You don't have access to this page.</p>} />
           </Routes>
         </main>

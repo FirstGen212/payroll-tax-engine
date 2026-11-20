@@ -338,3 +338,11 @@ fieldset.fg-plain { border: 0; padding: 0; margin: 0; min-width: 0; }
   .kpis > .kpi:first-child { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .fg-step-n, .b-primary, .b-green { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
+
+/* Valuation multiples: each figure is a button that opens its source. */
+.fg-cell { min-height: 32px; padding: 2px 8px; border: 1px solid transparent; border-radius: 8px; background: none; color: inherit; font: inherit; font-variant-numeric: tabular-nums; text-align: right; }
+.fg-cell:hover { background: var(--fg-seg-track); }
+.fg-cell.on { border-color: var(--fg-primary); background: var(--fg-seg-track); font-weight: 600; }
+.fg-multiples.tall { max-height: 40rem; }
+.fg-multiples td:first-child { white-space: nowrap; }
+.fg-multiples th .fg-subline { font-weight: 400; }
