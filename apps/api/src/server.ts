@@ -62,13 +62,15 @@ app.get('/api/rules/:id/history', async (req) => q('select * from tax_rule_histo
 app.patch('/api/rules/:id', async (req) => {
   const id = (req.params as any).id as string;
   const body = z.object({ calc: z.any().optional(), status: z.enum(['published', 'draft', 'projected', 'unverified', 'placeholder']).optional(), notes: z.string().nullish(), effectiveTo: z.string().nullable().optional(), by: z.string().nullish() }).parse(req.body);
+  // The rule's history names the signed-in person, not whatever the browser sends.
+  const by = req.actor ? (req.user && req.user.id !== req.actor.id ? `${req.actor.email} as ${req.user.email}` : req.actor.email) : body.by ?? 'ui';
   await tx(async (c) => {
     const before = (await c.query('select * from tax_rule where id=$1', [id])).rows[0];
     if (!before) throw Object.assign(new Error(`Rule ${id} not found`), { statusCode: 404 });
     await c.query('update tax_rule set calc=coalesce($2,calc), status=coalesce($3,status), notes=coalesce($4,notes), effective_to=case when $5::boolean then $6::date else effective_to end, updated_at=now(), updated_by=$7 where id=$1',
-      [id, body.calc ? JSON.stringify(body.calc) : null, body.status ?? null, body.notes ?? null, body.effectiveTo !== undefined, body.effectiveTo ?? null, body.by ?? 'ui']);
+      [id, body.calc ? JSON.stringify(body.calc) : null, body.status ?? null, body.notes ?? null, body.effectiveTo !== undefined, body.effectiveTo ?? null, by]);
     const after = (await c.query('select * from tax_rule where id=$1', [id])).rows[0];
-    await c.query('insert into tax_rule_history(rule_id,changed_by,before,after) values($1,$2,$3,$4)', [id, body.by ?? 'ui', before, after]);
+    await c.query('insert into tax_rule_history(rule_id,changed_by,before,after) values($1,$2,$3,$4)', [id, by, before, after]);
   });
   invalidateTaxDb();
   return { ok: true };

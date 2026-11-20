@@ -1,10 +1,46 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { api } from '../api';
 import { useAuth, useCan } from '../auth';
 import { PageHead } from '../components';
 
 const ROLE_CLASS: Record<string, string> = { admin: 'b-primary', manager: 'b-neutral', analyst: 'b-neutral', viewer: 'b-neutral' };
 const when = (d?: string | null) => (d ? new Date(d).toLocaleString() : '—');
+const AUDIT_LABELS: Record<string, string> = {
+  login: 'Signed in', 'login.failed': 'Failed sign-in', logout: 'Signed out', 'password.changed': 'Changed password', 'setup.first_admin': 'Created first admin',
+  'impersonate.start': 'Started viewing as', 'impersonate.stop': 'Stopped viewing as', 'user.create': 'Added user', 'user.update': 'Changed user',
+  'proposal.create': 'Created proposal', 'proposal.save': 'Saved proposal', 'proposal.recalculate': 'Recalculated proposal', 'proposal.copy': 'Copied proposal',
+  'proposal.status': 'Changed proposal status', 'proposal.delete': 'Deleted proposal', 'report.publish': 'Published client link', 'report.revoke': 'Turned off client link',
+  'POST /api/proposals': 'Created proposal', 'PUT /api/proposals/:id': 'Saved proposal', 'POST /api/proposals/:id/recalculate': 'Recalculated proposal', 'POST /api/proposals/:id/duplicate': 'Copied proposal',
+  'POST /api/clients': 'Added client', 'PUT /api/clients/:id': 'Changed client', 'POST /api/clients/:id/locations': 'Added work location', 'PUT /api/clients/:id/tax-settings': 'Changed client tax setup',
+  'POST /api/clients/:id/employees': 'Added employee', 'PUT /api/employees/:id': 'Changed employee', 'POST /api/clients/:id/payruns': 'Saved pay run',
+  'PATCH /api/rules/:id': 'Changed tax rule', 'POST /api/vendor-profiles/:id/samples': 'Uploaded vendor sample', 'POST /api/vendor-profiles/:id/learn': 'Learned vendor profile',
+};
+/** Who or what the row is about: a name where the log has one, otherwise the code in the request path (a tax rule or vendor id). */
+const auditTarget = (r: any): string => {
+  if (r.target_name) return r.target_name;
+  if (r.detail?.name) return r.detail.name;
+  if (!r.target) return '';
+  if (!r.target.startsWith('/api/')) return r.target;
+  const code = r.target.split('/')[3] ?? '';
+  return /^[0-9a-f-]{36}$/.test(code) ? '' : code;
+};
+const count = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+/** The saved detail of an audit row in words. */
+const auditDetail = (d: any) => {
+  if (!d || typeof d !== 'object') return '';
+  const out: string[] = [];
+  if (d.from !== undefined && d.to !== undefined) out.push(`From ${d.from} to ${d.to}`);
+  if (Array.isArray(d.role)) out.push(`Role from ${d.role[0]} to ${d.role[1]}`);
+  else if (typeof d.role === 'string') out.push(`Role ${d.role}`);
+  if (d.extra?.length) out.push(count(d.extra.length, 'extra permission'));
+  if (d.denied?.length) out.push(count(d.denied.length, 'removed permission'));
+  if (d.active === true) out.push('Account turned on');
+  if (d.active === false) out.push('Account turned off');
+  if (d.passwordReset) out.push('Password reset');
+  if (d.copiedFrom) out.push(`Copy of ${d.copiedFrom}`);
+  if (d.link) out.push(`Link ${d.link}`);
+  return out.join(', ');
+};
 const blank = { id: '', name: '', email: '', role: 'analyst', extraPermissions: [] as string[], deniedPermissions: [] as string[], active: true, password: '' };
 
 export default function Admin() {
@@ -67,11 +103,11 @@ export default function Admin() {
           <div className="grid2">
             <label>Name<input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></label>
             <label>Email<input type="email" value={edit.email} onChange={(e) => setEdit({ ...edit, email: e.target.value })} /></label>
-            <label>Role<select value={edit.role} onChange={(e) => setEdit({ ...edit, role: e.target.value, extraPermissions: [], deniedPermissions: [] })}>{meta.roles.map((r) => <option key={r.key} value={r.key}>{r.label}: {r.description}</option>)}</select></label>
+            <label>Role<select value={edit.role} onChange={(e) => setEdit({ ...edit, role: e.target.value, extraPermissions: [], deniedPermissions: [] })}>{meta.roles.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}</select></label>
             <label>{edit.id ? 'New password (leave blank to keep)' : 'Starting password'}<input type="password" autoComplete="new-password" value={edit.password} onChange={(e) => setEdit({ ...edit, password: e.target.value })} placeholder="At least 10 characters" /></label>
           </div>
           <h3>Permissions</h3>
-          <p className="fg-note">The role sets the starting permissions. Tick or untick any box to change them for this person only.</p>
+          <p className="fg-note"><b>{meta.roles.find((r) => r.key === edit.role)?.label}:</b> {meta.roles.find((r) => r.key === edit.role)?.description} The role sets the starting permissions. Tick or untick any box to change them for this person only.</p>
           <div className="fg-cards" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(16rem, 1fr))' }}>
             {[...new Set(meta.permissions.map((p) => p.group))].map((g) => (
               <div key={g}>
@@ -145,7 +181,7 @@ function AuditLog({ users }: { users: any[] }) {
   const [user, setUser] = useState('');
   const [action, setAction] = useState('');
   useEffect(() => { api(`/admin/audit?limit=300${user ? `&user=${user}` : ''}${action ? `&action=${encodeURIComponent(action)}` : ''}`).then(setRows).catch(() => setRows([])); }, [user, action]);
-  const label = useMemo(() => (a: string) => ({ login: 'Signed in', 'login.failed': 'Failed sign-in', logout: 'Signed out', 'impersonate.start': 'Started viewing as', 'impersonate.stop': 'Stopped viewing as', 'user.create': 'Added user', 'user.update': 'Changed user', 'report.publish': 'Published client link', 'report.revoke': 'Revoked client link', 'proposal.status': 'Changed proposal status', 'proposal.delete': 'Deleted proposal', 'password.changed': 'Changed password', 'setup.first_admin': 'Created first admin', 'POST /api/proposals': 'Created proposal', 'PUT /api/proposals/:id': 'Saved proposal', 'POST /api/proposals/:id/recalculate': 'Recalculated proposal', 'POST /api/proposals/:id/duplicate': 'Copied proposal', 'POST /api/clients': 'Added client', 'PUT /api/clients/:id': 'Changed client', 'POST /api/clients/:id/employees': 'Added employee', 'PUT /api/employees/:id': 'Changed employee', 'POST /api/clients/:id/payruns': 'Saved pay run' } as Record<string, string>)[a] ?? a, []);
+  const label = (a: string) => AUDIT_LABELS[a] ?? a;
   return (
     <div className="panel">
       <h3>Audit log</h3>
@@ -161,8 +197,8 @@ function AuditLog({ users }: { users: any[] }) {
             <td>{r.actor_name ?? <span className="muted">—</span>}</td>
             <td>{r.as_user_name ? <span className="badge b-warn">{r.as_user_name}</span> : <span className="muted">—</span>}</td>
             <td>{label(r.action)}</td>
-            <td className="small">{r.target}</td>
-            <td className="small muted fg-hide-narrow">{r.detail && !(Object.keys(r.detail).length === 1 && 'status' in r.detail) ? JSON.stringify(r.detail) : ''}{r.ip ? ` · ${r.ip}` : ''}</td>
+            <td className="small" title={r.target ?? undefined}>{auditTarget(r)}</td>
+            <td className="small muted fg-hide-narrow">{auditDetail(r.detail)}{r.ip && <div>{r.ip}</div>}</td>
           </tr>
         ))}
           {rows && !rows.length && <tr><td colSpan={6} className="muted">Nothing logged yet.</td></tr>}

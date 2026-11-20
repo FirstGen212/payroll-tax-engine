@@ -184,7 +184,7 @@ export async function proposalRoutes(app: FastifyInstance) {
 
   app.get('/api/report-defaults', async () => DEFAULT_REPORT_SETTINGS);
 
-  const save = async (req: FastifyRequest, b: z.infer<typeof Save>, id?: string) => {
+  const save = async (req: FastifyRequest, b: z.infer<typeof Save>, id?: string, event = id ? 'proposal.save' : 'proposal.create') => {
     const result = await calculate(b);
     const summary = { ...result.summary, unmatchedMunicipalities: result.unmatchedMunicipalities };
     const vals = [b.name, b.clientId ?? null, b.company ?? null, b.fileName ?? null, b.sheetName ?? null, JSON.stringify(b.headers), JSON.stringify(b.rows), JSON.stringify(b.mapping), JSON.stringify(result.settings), JSON.stringify(summary), JSON.stringify(result.employees), b.status, b.notes ?? null, JSON.stringify(b.reportSettings ?? {})];
@@ -193,13 +193,14 @@ export async function proposalRoutes(app: FastifyInstance) {
       const before = await load(req, id);
       await q(`update proposal set name=$1, client_id=$2, company=$3, file_name=$4, sheet_name=$5, headers=$6, raw_rows=$7, mapping=$8, settings=$9, summary=$10, results=$11, status=$12, notes=$13, report_settings=$14,
           completed_at = case when $12 = 'completed' and status <> 'completed' then now() else completed_at end, updated_at=now() where id=$15`, [...vals, id]);
-      if (before.status !== b.status) await audit(req, 'proposal.status', id, { from: before.status, to: b.status });
+      if (before.status !== b.status) await audit(req, 'proposal.status', b.name, { proposal: id, from: before.status, to: b.status });
     } else {
       const [p] = await q(`insert into proposal (name, client_id, company, file_name, sheet_name, headers, raw_rows, mapping, settings, summary, results, status, notes, report_settings, owner_id, completed_at)
         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, case when $12='completed' then now() end) returning id`, [...vals, req.user!.id]);
       pid = p.id;
     }
     await q('insert into proposal_revision(proposal_id, user_id, label, settings, summary) values($1,$2,$3,$4,$5)', [pid, req.actor!.id, b.revisionLabel ?? (id ? 'Saved' : 'Created'), JSON.stringify(result.settings), JSON.stringify(summary)]);
+    await audit(req, event, b.name, { proposal: pid });
     return { id: pid, result: { ...result, summary } };
   };
   app.post('/api/proposals', async (req) => save(req, Save.parse(req.body)));
@@ -208,7 +209,7 @@ export async function proposalRoutes(app: FastifyInstance) {
   // Re-run a saved proposal with today's tax data and engine, keeping its file, mapping and settings.
   app.post('/api/proposals/:id/recalculate', async (req) => {
     const p = await load(req, (req.params as any).id);
-    return save(req, { name: p.name, clientId: p.client_id, company: p.company, fileName: p.file_name, sheetName: p.sheet_name, headers: p.headers, rows: p.raw_rows, mapping: p.mapping, settings: p.settings, status: p.status, notes: p.notes, reportSettings: mergeReportSettings(p.report_settings), revisionLabel: 'Recalculated' }, p.id);
+    return save(req, { name: p.name, clientId: p.client_id, company: p.company, fileName: p.file_name, sheetName: p.sheet_name, headers: p.headers, rows: p.raw_rows, mapping: p.mapping, settings: p.settings, status: p.status, notes: p.notes, reportSettings: mergeReportSettings(p.report_settings), revisionLabel: 'Recalculated' }, p.id, 'proposal.recalculate');
   });
 
   app.post('/api/proposals/:id/duplicate', async (req) => {
@@ -216,6 +217,7 @@ export async function proposalRoutes(app: FastifyInstance) {
     const [n] = await q(`insert into proposal (name, client_id, company, file_name, sheet_name, headers, raw_rows, mapping, settings, summary, results, status, notes, report_settings, owner_id)
       select name || ' (copy)', client_id, company, file_name, sheet_name, headers, raw_rows, mapping, settings, summary, results, 'draft', notes, report_settings, $2 from proposal where id=$1 returning id`, [p.id, req.user!.id]);
     await q('insert into proposal_revision(proposal_id, user_id, label, settings, summary) values($1,$2,$3,$4,$5)', [n.id, req.actor!.id, `Copied from ${p.name}`, JSON.stringify(p.settings), JSON.stringify(p.summary)]);
+    await audit(req, 'proposal.copy', `${p.name} (copy)`, { proposal: n.id, copiedFrom: p.name });
     return { id: n.id };
   });
 
@@ -225,7 +227,7 @@ export async function proposalRoutes(app: FastifyInstance) {
     const { status } = z.object({ status: z.enum(STATUSES) }).parse(req.body);
     if (status !== p.status) {
       await q(`update proposal set status=$2, completed_at = case when $2 = 'completed' then now() else completed_at end, updated_at = now() where id=$1`, [p.id, status]);
-      await audit(req, 'proposal.status', p.id, { name: p.name, from: p.status, to: status });
+      await audit(req, 'proposal.status', p.name, { proposal: p.id, from: p.status, to: status });
     }
     return { ok: true, status };
   });
@@ -238,7 +240,7 @@ export async function proposalRoutes(app: FastifyInstance) {
   app.delete('/api/proposals/:id', async (req) => {
     const p = await load(req, (req.params as any).id);
     await q('delete from proposal where id=$1', [p.id]);
-    await audit(req, 'proposal.delete', p.name);
+    await audit(req, 'proposal.delete', p.name, { proposal: p.id });
     return { ok: true };
   });
 
@@ -260,13 +262,13 @@ export async function proposalRoutes(app: FastifyInstance) {
     // The link is the only key to the page, so the random part is long enough that it can't be guessed.
     const slug = newSlug(p.company || p.name, randomBytes(8).toString('hex'));
     await q('insert into proposal_report(slug, proposal_id, snapshot, created_by) values($1,$2,$3,$4)', [slug, p.id, JSON.stringify(buildSnapshot(p)), req.actor!.id]);
-    await audit(req, 'report.publish', slug, { proposal: p.id });
+    await audit(req, 'report.publish', p.name, { proposal: p.id, link: `/r/${slug}` });
     return { slug, url: `/r/${slug}` };
   });
   app.delete('/api/proposals/:id/reports/:slug', async (req) => {
     const p = await load(req, (req.params as any).id);
     await q('update proposal_report set revoked_at = now() where slug=$1 and proposal_id=$2', [(req.params as any).slug, p.id]);
-    await audit(req, 'report.revoke', (req.params as any).slug);
+    await audit(req, 'report.revoke', p.name, { proposal: p.id, link: `/r/${(req.params as any).slug}` });
     return { ok: true };
   });
   // Live preview of the client page with the current saved numbers and report settings (not published).

@@ -24,7 +24,8 @@
 - Rules fail closed: a route that changes data and has no rule returns 403 for everyone. Reads of reference data and the two calculate-only routes are open to any signed-in user.
 - Proposals add an ownership check inside the route (`load`): people see their own, or everyone's with `proposals.view_all`.
 - While viewing as someone, `req.user` carries that person's permissions limited to the ones the actor also holds.
-- An `onResponse` hook writes one `audit_log` row per successful change (`actor_id`, `as_user_id`, action, target). Routes that log a named event (sign-in, status change, publish) are not logged twice.
+- An `onResponse` hook writes one `audit_log` row per successful change (`actor_id`, `as_user_id`, action, target). Routes that log a named event (sign-in, user changes, every proposal and client-link action) are not logged twice. Named events store the name of the thing they changed, so the log still reads in plain words after that thing is deleted; for catch-all rows the audit list looks up the client, employee or proposal name from the request path.
+- A tax rule's history records the signed-in person who changed it, not a name sent by the browser.
 
 ## Proposals: queue, versions, client pages
 

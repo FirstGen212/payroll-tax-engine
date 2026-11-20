@@ -361,8 +361,13 @@ export async function registerAuth(app: FastifyInstance) {
   app.get('/api/admin/audit', async (req) => {
     const { user, action, limit } = req.query as Record<string, string | undefined>;
     const uuid = z.string().uuid().safeParse(user);
-    return q(`select a.id, a.at, a.action, a.target, a.detail, a.ip, au.name actor_name, au.email actor_email, iu.name as_user_name, iu.email as_user_email
+    // Catch-all rows keep the request path as their target; target_name puts a client, employee or proposal name next to it.
+    return q(`select a.id, a.at, a.action, a.target, a.detail, a.ip, au.name actor_name, au.email actor_email, iu.name as_user_name, iu.email as_user_email,
+        coalesce(c.name, e.first_name || ' ' || e.last_name, p.name, pc.name) target_name
       from audit_log a left join app_user au on au.id = a.actor_id left join app_user iu on iu.id = a.as_user_id
+        left join lateral (select substring(a.target from '^/api/[a-z-]+/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})')::uuid ref) x on true
+        left join client c on c.id = x.ref left join employee e on e.id = x.ref left join proposal p on p.id = x.ref
+        left join pay_run pr on pr.id = x.ref left join client pc on pc.id = pr.client_id
       where ($1::uuid is null or a.actor_id = $1 or a.as_user_id = $1) and ($2::text is null or a.action ilike '%'||$2||'%')
       order by a.at desc limit $3`, [uuid.success ? uuid.data : null, action || null, Math.min(Math.max(Number(limit) || 200, 1), 1000)]);
   });
