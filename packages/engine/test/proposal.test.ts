@@ -97,4 +97,39 @@ describe('proposal tool', () => {
     expect(checkDatesFor(2027, 'biweekly')).toHaveLength(26);
     expect(checkDatesFor(2027, 'semimonthly')).toHaveLength(24);
   });
+
+  it('reviewer overrides: exclude, force status, deduction and hours', () => {
+    const rows: CensusRow[] = [
+      { ...base, employeeId: 'x' },
+      { ...base, employeeId: 'y', hoursPerPeriod: 10 },
+      { ...base, employeeId: 'z' },
+      { ...base, employeeId: 'w' },
+    ];
+    const first = runProposal(rows, std, db);
+    const [kx, ky, kz, kw] = first.employees.map((e) => e.key);
+    expect(first.employees[1].standardEligibility).toBe('Not Eligible - Insufficient Hours');
+    const r = runProposal(rows, { ...std, overrides: {
+      [kx]: { exclude: true, note: 'terminated' },
+      [ky]: { hoursPerPeriod: 40 },
+      [kz]: { status: 'Not Eligible', note: 'owner' },
+      [kw]: { deductionPerCheck: 250 },
+    } }, db);
+    expect(r.employees.map((e) => e.eligibility)).toEqual(['Excluded', 'Eligible', 'Not Eligible - Reviewer decision', 'Eligible']);
+    expect(r.employees[0].reasons[0]).toMatch(/terminated/);
+    expect(r.employees[2].standardEligibility).toBe('Eligible');
+    expect(r.employees[3].perPeriod!.firstGen).toBe(250);
+    expect(r.summary.overridesApplied).toBe(4);
+    const forced = runProposal([{ ...base, hoursPerPeriod: 10 }], { ...std, partTime: { enabled: false } as any, overrides: { [first.employees[1].key.replace('|y|', '|1|')]: { status: 'Eligible' } } }, db);
+    expect(forced.employees[0].eligibility).toBe('Eligible');
+  });
+
+  it('participation rate scales savings and valuation; pay frequency and companies are summarized', () => {
+    const all = runProposal([base, { ...base, employeeId: '2', company: 'B Co' }], std, db);
+    const half = runProposal([base, { ...base, employeeId: '2', company: 'B Co' }], { ...std, participationRate: 0.5 }, db);
+    expect(half.summary.employerAnnualSavings.total).toBeCloseTo(all.summary.employerAnnualSavings.total / 2, 1);
+    expect(half.summary.valuationIncrease).toBeCloseTo(all.summary.valuationIncrease / 2, 0);
+    expect(half.summary.projectedEnrolled).toBe(1);
+    expect(all.summary.payFrequency).toMatchObject({ frequency: 'weekly', periodsPerYear: 52 });
+    expect(all.summary.byCompany.map((c) => c.company).sort()).toEqual(['(no company)', 'B Co']);
+  });
 });

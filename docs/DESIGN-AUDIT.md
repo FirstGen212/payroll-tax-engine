@@ -29,8 +29,18 @@ The web app was audited screen by screen against [DESIGN.md](DESIGN.md) and rest
 - Wide tables scroll inside their card (`fg-tablebox`), so no page scrolls sideways (checked at 1440px and 390px wide).
 - `prefers-reduced-motion` turns off transitions. Print view stays plain black on white.
 
+## Added with accounts, the proposal queue and client pages
+
+- **Sign-in** (§10): a centered card on the page gradient, used for sign-in and for creating the first admin. Errors use the caution style with a plain sentence.
+- **Sidebar**: tabs a person has no permission for are not shown; the foot shows who is signed in, with sign out and change password.
+- **View as**: a navy banner under the rule names who is being viewed and stays until "Stop viewing as" is pressed.
+- **Admin**: users, roles and permissions, audit log as tabs. Role and status use pills with a dot and a word; a per-person change shows a "changed from role" pill.
+- **Proposal queue**: status tabs with counts, one line per proposal, whole-dollar numbers. The status pill opens the browser's own menu to move a proposal along.
+- **Client proposal page** (`/r/...`): page head with the takeaway sentence, four tiles (first is the navy hero), numbered step cards, the employee table inside a scrolling box, a hero call-to-action card, footer. It never shows the internal app name. Print and "Download PDF" keep margins, repeat the table head on each page, and print the hero in color.
+- Checked in light and dark at 1440px, and at 390px for the client page and sign-in.
+
 ## Still open
 
 - **Logo files.** The guide's wordmark PNGs are not in the repo yet. Add `first-gen-wordmark-light.png`, `first-gen-wordmark-dark.png` and `first-gen-mark.png` to `apps/web/public/brand/` and the sidebar shows them automatically (156×26); until then it shows the words "First Gen" in plain text.
-- **Login page.** The app uses the browser's sign-in prompt (`APP_PASSWORD`). A styled login page per §10 needs real accounts (or Google sign-in) first.
+- **Read-only users on older pages.** Clients, employee, pay run and vendor pages still show their forms to someone without the permission; the server refuses the change and the app shows why in a notice. The proposal pages and the client list already hide or disable what a person can't use.
 - **Sticky bar** (§5) and **sparklines/d3 charts** (§7) are not used yet; there are no time-series views.

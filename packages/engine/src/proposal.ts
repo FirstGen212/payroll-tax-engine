@@ -83,6 +83,20 @@ export interface PartTimePlan {
   maxAnnualGross: number;
 }
 
+/** A reviewer's decision for one row, keyed by the employee result's `key`. */
+export interface EmployeeOverride {
+  /** Leave the row out of the proposal entirely. */
+  exclude?: boolean;
+  /** Force a status after the calculation: put them on the full plan, the part-time plan, or mark them not eligible. */
+  status?: 'Eligible' | 'PT Eligible' | 'Not Eligible';
+  /** Use this First Gen deduction per check instead of the file or default amount. */
+  deductionPerCheck?: number;
+  /** Use these average hours per pay period instead of the file's. */
+  hoursPerPeriod?: number;
+  /** Why the reviewer changed it (shown in results and the audit trail). */
+  note?: string;
+}
+
 export interface ProposalSettings {
   /** Plan year: the engine runs every check date in this year. */
   year: number;
@@ -131,6 +145,10 @@ export interface ProposalSettings {
   employer: { name?: string; homeState?: string; suiRates?: Record<string, number>; futaExempt?: boolean };
   conventions?: Partial<VendorConventions>;
   vendorProfileId?: string;
+  /** Share of eligible employees expected to enroll (1 = all). Scales savings, allotments and valuation. */
+  participationRate: number;
+  /** Per-employee reviewer decisions. */
+  overrides: Record<string, EmployeeOverride>;
 }
 
 export const DEFAULT_PROPOSAL_SETTINGS: ProposalSettings = {
@@ -164,6 +182,8 @@ export const DEFAULT_PROPOSAL_SETTINGS: ProposalSettings = {
   annualGrossThreshold: 20000,
   reviewMinConfidence: 0,
   employer: {},
+  participationRate: 1,
+  overrides: {},
 };
 
 export type Eligibility =
@@ -176,7 +196,9 @@ export type Eligibility =
   | 'Not Eligible - Insufficient Hours'
   | 'Not Eligible - Low Income'
   | 'Not Eligible - Insufficient Savings'
-  | 'Not Eligible - Insufficient Savings + No Federal Taxes Paid';
+  | 'Not Eligible - Insufficient Savings + No Federal Taxes Paid'
+  | 'Not Eligible - Reviewer decision'
+  | 'Excluded';
 
 export const ELIGIBILITY_ORDER: Eligibility[] = [
   'Eligible',
@@ -189,6 +211,8 @@ export const ELIGIBILITY_ORDER: Eligibility[] = [
   'Not Eligible - Insufficient Hours',
   'Not Eligible - Insufficient Funds',
   'Not Eligible - No Gross Compensation',
+  'Not Eligible - Reviewer decision',
+  'Excluded',
 ];
 
 export interface ScenarioTotals {
@@ -253,6 +277,8 @@ export interface ProposalEmployeeResult extends Partial<PlanCalc> {
   partTime?: { triggers: string[]; deductionPerCheck: number; allotment: number; savingsDelta: number; eligible: boolean; calc: PlanCalc };
   reasons: string[];
   flags: string[];
+  /** The reviewer override applied to this row, if any. */
+  override?: EmployeeOverride;
 }
 
 export interface ProgramAnalysis {
@@ -284,6 +310,13 @@ export interface ProposalSummary {
   benefitPackage: BenefitPackage;
   dataWarnings: number;
   duplicates: { rowNumber?: number; duplicateOf?: number; name: string }[];
+  /** Most common pay frequency among eligible employees (for "per pay period" figures). */
+  payFrequency: { frequency?: PayFrequency; periodsPerYear: number; employees: number };
+  /** Eligible employees expected to enroll at the participation rate. */
+  projectedEnrolled: number;
+  participationRate: number;
+  overridesApplied: number;
+  byCompany: { company: string; employees: number; eligible: number; monthlySavings: number; employerAnnualSavings: number }[];
 }
 
 export interface ProposalResult {
@@ -515,6 +548,9 @@ export function evaluateEmployee(row: CensusRow, s: ProposalSettings, db: TaxDat
     res.reasons.push(why);
     return res;
   };
+  const ov = s.overrides?.[res.key];
+  if (ov && Object.keys(ov).length) res.override = ov;
+  if (ov?.exclude) return fail('Excluded', `Left out by the reviewer${ov.note ? `: ${ov.note}` : '.'}`);
 
   // 1. Data needed to calculate at all
   const freq = parseFrequency(row.payFrequency, row.periodsPerYear);
@@ -540,6 +576,10 @@ export function evaluateEmployee(row: CensusRow, s: ProposalSettings, db: TaxDat
 
   let hoursPerPeriod: number | undefined;
   if (row.hoursPerPeriod !== undefined && row.hoursPerPeriod !== null) hoursPerPeriod = row.hoursPerPeriod;
+  if (ov?.hoursPerPeriod !== undefined && ov.hoursPerPeriod !== null) {
+    res.flags.push(`Hours per period set by the reviewer: ${ov.hoursPerPeriod} (file: ${row.hoursPerPeriod ?? 'none'}).`);
+    hoursPerPeriod = ov.hoursPerPeriod;
+  }
   if ((!hoursPerPeriod || hoursPerPeriod <= 0) && /salar/i.test(row.employmentType ?? '')) {
     hoursPerPeriod = s.salariedHoursPerWeek * WEEKS_PER_PERIOD[freq];
     res.flags.push(`Salaried with no hours: ${s.salariedHoursPerWeek} hours/week assumed.`);
@@ -551,7 +591,11 @@ export function evaluateEmployee(row: CensusRow, s: ProposalSettings, db: TaxDat
 
   // 2. Before / after on the standard plan
   const useRow = s.useRowDeduction && row.proposedDeduction && row.proposedDeduction > 0;
-  const dedPerCheck = r2(useRow ? (s.rowDeductionPer === 'check' ? row.proposedDeduction! : (row.proposedDeduction! * 12) / periods) : s.deductionPerCheck);
+  let dedPerCheck = r2(useRow ? (s.rowDeductionPer === 'check' ? row.proposedDeduction! : (row.proposedDeduction! * 12) / periods) : s.deductionPerCheck);
+  if (ov?.deductionPerCheck !== undefined && ov.deductionPerCheck !== null && ov.deductionPerCheck > 0) {
+    res.flags.push(`Deduction set by the reviewer: ${usd(ov.deductionPerCheck)} per check (was ${usd(dedPerCheck)}).`);
+    dedPerCheck = r2(ov.deductionPerCheck);
+  }
   const { input, notes } = payInputFromRow(row, freq, gross, s, otherComp);
   res.flags.push(...notes);
   const existing = (input.deductions ?? []).reduce((a, d) => a + (d.amount ?? (d.percent ?? 0) * gross), 0);
@@ -561,7 +605,7 @@ export function evaluateEmployee(row: CensusRow, s: ProposalSettings, db: TaxDat
     res.deductionPerCheck = dedPerCheck;
     res.perPeriod = { gross: gross + otherComp, firstGen: dedPerCheck, deductions: r2(existing), net: r2(gross + otherComp - existing - dedPerCheck), taxBefore: 0, taxAfter: 0, stateTaxBefore: 0, effectiveRate: 0 };
     fail('Not Eligible - Insufficient Funds', `Deduction ${usd(dedPerCheck)} plus existing deductions exceed gross pay per check (${usd(gross + otherComp)}).`);
-    return tryPartTime(res, input, freq, gross, s, db);
+    return applyStatusOverride(tryPartTime(res, input, freq, gross, s, db), input, freq, gross, s, db);
   }
   Object.assign(res, planCalc(input, freq, gross, dedPerCheck, s, db));
   const unv = unverifiedLines(input, s, db);
@@ -596,7 +640,34 @@ export function evaluateEmployee(row: CensusRow, s: ProposalSettings, db: TaxDat
   // Everything except the allotment test (for the price-point analyzer)
   if (noFed && s.noFederalTaxAs === 'warning') res.flags.unshift('⚠ No federal income tax withheld today according to the file.');
   res.passesNonSavingsRules = annualGross > s.lowIncomeMax && !(noFed && s.noFederalTaxAs === 'status') && hoursPerPeriod !== undefined && hoursPerPeriod >= s.minHoursPerPeriod;
-  return tryPartTime(res, input, freq, gross, s, db);
+  return applyStatusOverride(tryPartTime(res, input, freq, gross, s, db), input, freq, gross, s, db);
+}
+
+/** A reviewer's forced status wins over the rules; the rule result is kept in standardEligibility and the reasons. */
+function applyStatusOverride(res: ProposalEmployeeResult, input: PayInput, freq: PayFrequency, gross: number, s: ProposalSettings, db: TaxDatabase): ProposalEmployeeResult {
+  const want = res.override?.status;
+  if (!want) return res;
+  const why = res.override?.note ? `: ${res.override.note}` : '';
+  const ruleResult = res.eligibility;
+  if (want === 'Not Eligible') {
+    res.standardEligibility = ruleResult;
+    res.eligibility = 'Not Eligible - Reviewer decision';
+    res.reasons.push(`Marked not eligible by the reviewer (rules said ${ruleResult})${why}.`);
+  } else if (want === 'Eligible') {
+    if (!res.monthly) { res.reasons.push(`Reviewer asked for the full plan, but the check could not be calculated (${ruleResult}).`); return res; }
+    res.standardEligibility = ruleResult;
+    res.eligibility = 'Eligible';
+    res.reasons.push(`Put on the full plan by the reviewer (rules said ${ruleResult})${why}.`);
+  } else if (want === 'PT Eligible') {
+    const existing = (input.deductions ?? []).reduce((a, d) => a + (d.amount ?? (d.percent ?? 0) * gross), 0);
+    if (s.partTime.deductionPerCheck + existing > gross) { res.reasons.push(`Reviewer asked for the part-time plan, but its ${usd(s.partTime.deductionPerCheck)} deduction does not fit the check.`); return res; }
+    const calc = res.partTime?.calc ?? planCalc(input, freq, gross, s.partTime.deductionPerCheck, s, db);
+    res.partTime = { triggers: res.partTime?.triggers ?? ['reviewer'], deductionPerCheck: s.partTime.deductionPerCheck, allotment: calc.monthly.allotment, savingsDelta: r2(calc.monthly.allotment - (res.monthly?.allotment ?? 0)), eligible: true, calc };
+    res.standardEligibility = ruleResult === 'PT Eligible' ? res.standardEligibility : ruleResult;
+    res.eligibility = 'PT Eligible';
+    res.reasons.push(`Put on the part-time plan by the reviewer (rules said ${ruleResult})${why}.`);
+  }
+  return res;
 }
 
 /** Rows that fail the standard plan but trigger the part-time plan are re-run with the smaller deduction. */
@@ -627,7 +698,10 @@ export function runProposal(rows: CensusRow[], settings: Partial<ProposalSetting
     ...settings,
     partTime: { ...DEFAULT_PROPOSAL_SETTINGS.partTime, ...(settings.partTime ?? {}) },
     employer: { ...DEFAULT_PROPOSAL_SETTINGS.employer, ...(settings.employer ?? {}) },
+    overrides: settings.overrides ?? {},
+    participationRate: settings.participationRate ?? DEFAULT_PROPOSAL_SETTINGS.participationRate,
   };
+  const rate = Math.min(1, Math.max(0, s.participationRate));
   // The same employee can appear more than once (several checks in a register).
   const seen = new Map<string, number>();
   const duplicates: { rowNumber?: number; duplicateOf?: number; name: string }[] = [];
@@ -661,7 +735,19 @@ export function runProposal(rows: CensusRow[], settings: Partial<ProposalSetting
     return { price, eligible, partTimeEligible: pt.length, monthlyRevenue: r2(revenue), monthlyBenefitCost: r2(cost), monthlyMargin: r2(revenue - cost), marginPercent: revenue ? Math.round(((revenue - cost) / revenue) * 1000) / 1000 : 0, annualMargin: r2((revenue - cost) * 12) };
   });
 
-  const erTotal = r2(erFull + erPt);
+  const erTotal = r2((erFull + erPt) * rate);
+  const freqCount = new Map<PayFrequency, number>();
+  for (const e of [...full, ...pt]) if (e.frequency) freqCount.set(e.frequency, (freqCount.get(e.frequency) ?? 0) + 1);
+  const topFreq = [...freqCount.entries()].sort((a, b) => b[1] - a[1])[0];
+  const companies = new Map<string, { company: string; employees: number; eligible: number; monthlySavings: number; employerAnnualSavings: number }>();
+  for (const e of employees) {
+    const c = e.row.company?.trim() || '(no company)';
+    const x = companies.get(c) ?? { company: c, employees: 0, eligible: 0, monthlySavings: 0, employerAnnualSavings: 0 };
+    x.employees++;
+    if (e.eligibility === 'Eligible') { x.eligible++; x.monthlySavings += e.monthly!.allotment * rate; x.employerAnnualSavings += e.monthly!.employerTaxSavings * 12 * rate; }
+    if (e.eligibility === 'PT Eligible') { x.eligible++; x.monthlySavings += e.partTime!.allotment * rate; x.employerAnnualSavings += e.partTime!.calc.monthly.employerTaxSavings * 12 * rate; }
+    companies.set(c, x);
+  }
   return {
     settings: s,
     employees,
@@ -672,9 +758,9 @@ export function runProposal(rows: CensusRow[], settings: Partial<ProposalSetting
       eligibleFull: full.length,
       eligiblePartTime: pt.length,
       eligibleTotal: full.length + pt.length,
-      monthlySavings: { total: r2(msFull + msPt), full: msFull, partTime: msPt, average: full.length ? r2(msFull / full.length) : 0, annual: r2((msFull + msPt) * 12) },
-      employerAnnualSavings: { total: erTotal, full: erFull, partTime: erPt, perEmployee: full.length ? r2(erFull / full.length) : 0 },
-      employeeAnnualTaxSavings: sum(full.map((e) => e.monthly!.employeeTaxSavings * 12).concat(pt.map((e) => e.partTime!.calc.monthly.employeeTaxSavings * 12))),
+      monthlySavings: { total: r2((msFull + msPt) * rate), full: r2(msFull * rate), partTime: r2(msPt * rate), average: full.length ? r2(msFull / full.length) : 0, annual: r2((msFull + msPt) * 12 * rate) },
+      employerAnnualSavings: { total: erTotal, full: r2(erFull * rate), partTime: r2(erPt * rate), perEmployee: full.length ? r2(erFull / full.length) : 0 },
+      employeeAnnualTaxSavings: r2(sum(full.map((e) => e.monthly!.employeeTaxSavings * 12).concat(pt.map((e) => e.partTime!.calc.monthly.employeeTaxSavings * 12))) * rate),
       valuationIncrease: r2(erTotal * s.ebitdaMultiple),
       allotmentDistribution: {
         below: withAllot.filter((e) => e.monthly!.allotment < lowEdge).length,
@@ -687,6 +773,11 @@ export function runProposal(rows: CensusRow[], settings: Partial<ProposalSetting
       benefitPackage: pkg,
       dataWarnings: employees.reduce((a, e) => a + e.flags.length, 0),
       duplicates,
+      payFrequency: { frequency: topFreq?.[0], periodsPerYear: topFreq ? PERIODS_PER_YEAR[topFreq[0]] : 26, employees: topFreq?.[1] ?? 0 },
+      projectedEnrolled: Math.round((full.length + pt.length) * rate),
+      participationRate: rate,
+      overridesApplied: employees.filter((e) => e.override).length,
+      byCompany: [...companies.values()].map((c) => ({ ...c, monthlySavings: r2(c.monthlySavings), employerAnnualSavings: r2(c.employerAnnualSavings) })).sort((a, b) => b.employerAnnualSavings - a.employerAnnualSavings),
     },
   };
 }

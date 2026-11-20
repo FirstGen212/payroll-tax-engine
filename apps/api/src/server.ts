@@ -12,26 +12,23 @@ import { pool, q, tx } from './db.js';
 import { getTaxDb, invalidateTaxDb } from './taxdb.js';
 import { seed } from './seed.js';
 import { proposalRoutes } from './proposals/routes.js';
+import { registerAuth } from './auth.js';
 
 const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' }, bodyLimit: 40 * 1024 * 1024 });
-await app.register(cors, { origin: true });
-app.setErrorHandler((err, _req, reply) => {
-  const status = (err as any).issues ? 400 : (err as any).statusCode ?? 500;
-  reply.code(status).send({ error: err.message, issues: (err as any).issues });
+// The web app is served from this same address (and through Vite's proxy in development), so other sites get no
+// access unless CORS_ORIGIN names them.
+await app.register(cors, { origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',').map((o) => o.trim()) : false });
+app.setErrorHandler((err, req, reply) => {
+  const issues = (err as any).issues as { path: (string | number)[]; message: string }[] | undefined;
+  const status = issues ? 400 : (err as any).statusCode ?? 500;
+  if (status >= 500) req.log.error(err);
+  // Input that fails a check is reported as a sentence per field, not as the validator's raw output.
+  const error = issues ? issues.slice(0, 5).map((i) => (i.path.length ? `${i.path.join('.')}: ${i.message}` : i.message)).join('. ') : status >= 500 ? 'Something went wrong on the server. Try again; if it keeps happening, tell an admin.' : err.message;
+  reply.code(status).send({ error, issues });
 });
 
-// Optional sign-in: when APP_PASSWORD is set (as on Render), every page and API call needs it (browser login prompt).
-const appUser = process.env.APP_USER ?? 'firstgen';
-const appPassword = process.env.APP_PASSWORD;
-if (appPassword) {
-  const expected = 'Basic ' + Buffer.from(`${appUser}:${appPassword}`).toString('base64');
-  app.addHook('onRequest', async (req, reply) => {
-    if (req.url === '/api/health') return;
-    if (req.headers.authorization !== expected) {
-      reply.header('WWW-Authenticate', 'Basic realm="Payroll Tax Engine", charset="UTF-8"').code(401).send({ error: 'Sign in required' });
-    }
-  });
-}
+// Sign-in, permissions and the audit log (see auth.ts). APP_PASSWORD is the key that guards creating the first admin.
+await registerAuth(app);
 
 const iso = (d: unknown) => (d instanceof Date ? d.toISOString().slice(0, 10) : (d as string | null) ?? undefined);
 
@@ -186,7 +183,7 @@ app.put('/api/employees/:id', async (req) => {
 async function buildInput(clientId: string, employeeId: string, line: { earnings: any[]; deductions?: any[]; replaceRecurring?: boolean }, checkDate: string, runType: PayInput['runType'], vendorId?: string): Promise<PayInput> {
   const [client] = await q('select * from client where id=$1', [clientId]);
   const [e] = await q('select * from employee where id=$1 and client_id=$2', [employeeId, clientId]);
-  if (!e) throw new Error(`Employee ${employeeId} not found for client`);
+  if (!e) throw Object.assign(new Error(`Employee ${employeeId} not found for client`), { statusCode: 404 });
   const work = await q('select * from employee_work_allocation where employee_id=$1', [employeeId]);
   const recurring = line.replaceRecurring ? [] : await q('select * from employee_recurring_deduction where employee_id=$1', [employeeId]);
   const settings = await q('select * from client_tax_setting where client_id=$1 and effective_from <= $2 order by effective_from', [clientId, checkDate]);

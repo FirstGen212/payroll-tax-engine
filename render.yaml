@@ -17,10 +17,10 @@ services:
         fromDatabase:
           name: payroll-db
           property: connectionString
-      - key: APP_USER
-        value: firstgen
+      # Setup key: the app asks for this value once, when the first admin account is created.
+      # Render generates it; read it under the service's Environment tab. Everyone signs in with their own account after that.
       - key: APP_PASSWORD
-        generateValue: true  # random password; see it under the service's Environment tab
+        generateValue: true
 
 databases:
   - name: payroll-db

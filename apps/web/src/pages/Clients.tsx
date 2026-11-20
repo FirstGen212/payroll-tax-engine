@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
+import { useCan } from '../auth';
 import { PageHead, StateSelect, useReference } from '../components';
 
 export default function Clients() {
@@ -8,6 +9,7 @@ export default function Clients() {
   const [form, setForm] = useState({ name: '', fein: '', homeState: 'NY', payFrequency: 'biweekly', currentVendor: '', futaExempt: false });
   const [err, setErr] = useState('');
   const ref = useReference();
+  const can = useCan();
   const load = () => api('/clients').then(setClients);
   useEffect(() => { load(); }, []);
   const create = async () => {
@@ -29,7 +31,7 @@ export default function Clients() {
           </tbody>
         </table></div>
       </div>
-      <div className="panel">
+      {can('clients.edit') && <div className="panel">
         <h3>Add a client</h3>
         <div className="row">
           <label>Name<input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
@@ -41,7 +43,7 @@ export default function Clients() {
           <button className="primary" disabled={!form.name} onClick={create}>Add client</button>
         </div>
         {err && <div className="err">{err}</div>}
-      </div>
+      </div>}
     </>
   );
 }

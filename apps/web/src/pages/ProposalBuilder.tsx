@@ -2,6 +2,9 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, money } from '../api';
 import { PageHead, StateSelect, useReference } from '../components';
+import { useCan } from '../auth';
+import { PROPOSAL_STATUSES, StatusPill } from './Proposals';
+import { ReportView } from './Report';
 
 const FIELD_LABELS: Record<string, string> = {
   company: 'Company Name', employeeId: 'Employee ID', firstName: 'First Name', lastName: 'Last Name', workState: 'Work State', residenceState: 'Residence State',
@@ -16,7 +19,7 @@ const FIELD_LABELS: Record<string, string> = {
 const REQUIRED = ['grossPay', 'payFrequency', 'workState', 'federalFilingStatus'];
 const ORDER = ['Eligible', 'PT Eligible', 'No Federal Taxes Paid', 'NEEDS REVIEW', 'Not Eligible - Insufficient Savings', 'Not Eligible - Insufficient Savings + No Federal Taxes Paid', 'Not Eligible - Low Income', 'Not Eligible - Insufficient Hours', 'Not Eligible - Insufficient Funds', 'Not Eligible - No Gross Compensation'];
 const SHORT = (e: string) => e.replace('Not Eligible - ', '');
-const ELIG_CLASS = (e: string) => (e === 'Eligible' || e === 'PT Eligible' ? 'b-ok' : e === 'NEEDS REVIEW' || e === 'No Federal Taxes Paid' ? 'b-warn' : 'b-bad');
+const ELIG_CLASS = (e: string) => (e === 'Excluded' ? 'b-neutral' : e === 'Eligible' || e === 'PT Eligible' ? 'b-ok' : e === 'NEEDS REVIEW' || e === 'No Federal Taxes Paid' ? 'b-warn' : 'b-bad');
 const pctf = (n?: number) => (n === undefined || n === null ? '' : `${(n * 100).toFixed(1)}%`);
 const colLetter = (i: number) => (i < 26 ? String.fromCharCode(65 + i) : String.fromCharCode(64 + Math.floor(i / 26)) + String.fromCharCode(65 + (i % 26)));
 
@@ -47,13 +50,19 @@ export default function ProposalBuilder() {
   const [err, setErr] = useState('');
   const [editReq, setEditReq] = useState(false);
   const [view, setView] = useState<'results' | 'proposal'>('results');
+  const [tab, setTab] = useState<'results' | 'client' | 'history'>('results');
+  const [reportSettings, setReportSettings] = useState<any>();
+  const [dirty, setDirty] = useState(false);
+  const can = useCan();
+  const editable = can('proposals.edit');
 
   useEffect(() => {
     api('/proposals/defaults').then((d) => {
       setDefaults(d);
-      if (!id) { setSettings(structuredClone(d.settings)); return; }
+      if (!id) { setSettings(structuredClone(d.settings)); api('/report-defaults').then(setReportSettings); return; }
       api(`/proposals/${id}`).then((p) => {
-        setMeta({ name: p.name, clientId: p.client_id ?? '', status: p.status, company: p.company });
+        setMeta({ name: p.name, clientId: p.client_id ?? '', status: p.status, company: p.company, notes: p.notes ?? '', owner: p.owner_name });
+        setReportSettings(p.report_settings);
         setHeaders(p.headers); setRows(p.raw_rows); setMapping(p.mapping); setSheetName(p.sheet_name ?? '');
         setFile({ fileName: p.file_name, sheets: [] });
         setSettings({ ...structuredClone(d.settings), ...p.settings, partTime: { ...d.settings.partTime, ...(p.settings.partTime ?? {}) } });
@@ -81,24 +90,28 @@ export default function ProposalBuilder() {
     } catch (e: any) { setErr(e.message); } finally { setBusy(''); }
   };
 
-  const body = (s = settings) => ({ headers, rows, mapping, settings: s, name: meta.name || 'Proposal', clientId: meta.clientId || null, company: meta.company ?? null, fileName: file?.fileName ?? null, sheetName, status: meta.status });
+  const body = (s = settings) => ({ headers, rows, mapping, settings: s, name: meta.name || 'Proposal', clientId: meta.clientId || null, company: meta.company ?? null, fileName: file?.fileName ?? null, sheetName, status: meta.status, notes: meta.notes || null, reportSettings });
   const calculate = async (s = settings) => {
     setErr(''); setBusy(`Calculating ${rows.length} rows: a full year of checks for each, with and without the deduction…`);
-    try { setResult(await api('/proposals/calculate', { json: body(s) })); } catch (e: any) { setErr(e.message); } finally { setBusy(''); }
+    try { setResult(await api('/proposals/calculate', { json: body(s) })); setDirty(!!id); } catch (e: any) { setErr(e.message); } finally { setBusy(''); }
   };
   const save = async () => {
     setErr(''); setBusy('Saving…');
     try {
       const r = await api(id ? `/proposals/${id}` : '/proposals', { method: id ? 'PUT' : 'POST', json: body() });
       setResult(r.result);
+      setDirty(false);
       if (!id) nav(`/proposals/${r.id}`, { replace: true });
     } catch (e: any) { setErr(e.message); } finally { setBusy(''); }
   };
   const download = async () => {
     setBusy('Building workbook…');
     try {
-      const res = await fetch('/api/proposals/export', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body()) });
-      if (!res.ok) throw new Error((await res.json()).error);
+      // People who can't change proposals get the workbook of the saved numbers; editors get what is on screen.
+      const res = editable || !id
+        ? await fetch('/api/proposals/export', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body()) })
+        : await fetch(`/api/proposals/${id}/export`);
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? 'The workbook could not be built.');
       const url = URL.createObjectURL(await res.blob());
       Object.assign(document.createElement('a'), { href: url, download: `${meta.name || 'Proposal'} - Underwriting.xlsx` }).click();
       URL.revokeObjectURL(url);
@@ -117,6 +130,14 @@ export default function ProposalBuilder() {
 
   if (!defaults || !settings) return <p className="muted">Loading…</p>;
   const setS = (p: any) => setSettings({ ...settings, ...p });
+  const setOverride = (key: string, o: any) => {
+    const overrides = { ...(settings.overrides ?? {}) };
+    const clean = Object.fromEntries(Object.entries(o ?? {}).filter(([, v]) => v !== undefined && v !== '' && v !== false && v !== null));
+    if (Object.keys(clean).length) overrides[key] = clean; else delete overrides[key];
+    const next = { ...settings, overrides };
+    setSettings(next);
+    void calculate(next);
+  };
   const setPT = (p: any) => setS({ partTime: { ...settings.partTime, ...p } });
   const mappedCount = Object.values(mapping).filter(Boolean).length;
   const missing = REQUIRED.filter((f) => !mapping[f]);
@@ -134,15 +155,19 @@ export default function ProposalBuilder() {
       </div>
       <div className="stepper noprint">{['Import', 'Map', 'Results'].map((l, i) => <span key={l} className={step > i + 1 ? 'done' : step === i + 1 ? 'on' : ''}><b>{step > i + 1 ? '✓' : i + 1}</b>{l}</span>)}</div>
       {err && <div className="err" style={{ marginBottom: 16 }}>{err}</div>}
+      {!editable && <div className="fg-callout noprint" style={{ marginBottom: 16 }}>You can look at this proposal but not change it. Ask an admin if you need to edit proposals.</div>}
 
+      <fieldset className="fg-plain" disabled={!editable}>
       <div className="panel noprint">
         <div className="row" style={{ justifyContent: 'space-between', alignItems: 'baseline' }}><h3 style={{ margin: 0 }}>Import source</h3>{file?.fileName && <span className="muted small">{file.fileName}{sheetName ? ` · ${sheetName}` : ''}</span>}</div>
         <div className="row" style={{ marginTop: 8 }}>
           <label>Census, underwriting sheet or payroll register (.xlsx or .csv)<input type="file" accept=".xlsx,.xlsm,.csv" onChange={(e) => upload(e.target.files?.[0])} /></label>
           <label style={{ minWidth: 260 }}>Proposal name<input value={meta.name} onChange={(e) => setMeta({ ...meta, name: e.target.value })} /></label>
           <label>Client (optional)<select value={meta.clientId} onChange={(e) => pickClient(e.target.value)}><option value="">Prospect (not a client yet)</option>{clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
-          <label>Status<select value={meta.status} onChange={(e) => setMeta({ ...meta, status: e.target.value })}>{['draft', 'sent', 'won', 'lost'].map((s) => <option key={s}>{s}</option>)}</select></label>
+          <label>Status<select value={meta.status} onChange={(e) => { setMeta({ ...meta, status: e.target.value }); setDirty(true); }}>{PROPOSAL_STATUSES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></label>
         </div>
+        <label style={{ marginTop: 12 }}>Notes for the team (not shown to the client)<input value={meta.notes ?? ''} onChange={(e) => { setMeta({ ...meta, notes: e.target.value }); setDirty(true); }} placeholder="e.g. waiting on October register, owner wants MEC Plus quote" /></label>
+        {id && meta.owner && <div className="muted small" style={{ marginTop: 8 }}>Owner: {meta.owner} · <StatusPill s={meta.status} /></div>}
       </div>
 
       <div className="panel noprint">
@@ -164,6 +189,7 @@ export default function ProposalBuilder() {
               <label>First Gen deduction per check (when the file has none) ($)<input type="number" step="0.01" value={settings.deductionPerCheck} onChange={(e) => setS({ deductionPerCheck: num(e.target.value) })} /></label>
               <label>File's First Gen deduction amount is per<select value={settings.useRowDeduction ? settings.rowDeductionPer : 'ignore'} onChange={(e) => setS(e.target.value === 'ignore' ? { useRowDeduction: false } : { useRowDeduction: true, rowDeductionPer: e.target.value })}><option value="check">check</option><option value="month">month</option><option value="ignore">ignore it, use the amount above</option></select></label>
               <label>Employees with no federal tax withheld<select value={settings.noFederalTaxAs} onChange={(e) => setS({ noFederalTaxAs: e.target.value })}><option value="warning">Warning only (still eligible)</option><option value="status">Own status: No Federal Taxes Paid</option></select></label>
+              <label>Participation: share of eligible employees expected to enroll (%)<input type="number" min={0} max={100} value={Math.round((settings.participationRate ?? 1) * 100)} onChange={(e) => setS({ participationRate: Math.min(100, Math.max(0, num(e.target.value))) / 100 })} /></label>
               <label>Employer savings<select value={settings.employerSavingsBasis} onChange={(e) => setS({ employerSavingsBasis: e.target.value })}><option value="fica">Social Security + Medicare (7.65%)</option><option value="all">All employer taxes (adds FUTA, SUI, etc.)</option></select></label>
             </div>
             <div className="row" style={{ marginTop: 12 }}>
@@ -219,16 +245,30 @@ export default function ProposalBuilder() {
           </div>
         </div>
       )}
+      </fieldset>
 
       {result && (
-        <Results result={result} settings={settings} setS={setS} view={view} setView={setView} meta={meta} busy={busy}
-          onSave={save} onDownload={download} onPickProgram={pickProgram} saveLabel={id ? 'Save changes' : 'Save proposal'} />
+        <div className="row noprint" style={{ marginBottom: 16, alignItems: 'center' }}>
+          <div className="tabs" style={{ marginBottom: 0 }}>
+            <button className={tab === 'results' ? 'on' : ''} onClick={() => setTab('results')}>Results</button>
+            <button className={tab === 'client' ? 'on' : ''} onClick={() => setTab('client')}>Client page</button>
+            {id && <button className={tab === 'history' ? 'on' : ''} onClick={() => setTab('history')}>History</button>}
+          </div>
+          {dirty && <span className="badge b-warn">Unsaved changes</span>}
+          {editable && <button className="small primary" disabled={!!busy} onClick={save}>{id ? 'Save changes' : 'Save proposal'}</button>}
+        </div>
       )}
+      {result && tab === 'results' && (
+        <Results result={result} settings={settings} setS={setS} view={view} setView={setView} meta={meta} busy={busy} editable={editable}
+          onSave={save} onDownload={download} onPickProgram={editable ? pickProgram : () => {}} onOverride={setOverride} saveLabel={id ? 'Save changes' : 'Save proposal'} />
+      )}
+      {result && tab === 'client' && <ClientPage id={id} dirty={dirty} repeats={result.settings.dedupe ? 0 : result.summary.duplicates?.length ?? 0} reportSettings={reportSettings} setReportSettings={(r: any) => { setReportSettings(r); setDirty(true); }} onSave={save} canShare={can('proposals.share')} editable={editable} />}
+      {result && tab === 'history' && id && <History id={id} onLoad={(s: any) => { setSettings({ ...settings, ...s }); setTab('results'); void calculate({ ...settings, ...s }); }} editable={editable} />}
     </>
   );
 }
 
-function Results({ result, settings, setS, view, setView, meta, busy, onSave, onDownload, onPickProgram, saveLabel }: any) {
+function Results({ result, settings, setS, view, setView, meta, busy, onSave, onDownload, onPickProgram, onOverride, editable, saveLabel }: any) {
   const s = result.summary;
   const [filter, setFilter] = useState('');
   const [stateF, setStateF] = useState('');
@@ -270,8 +310,7 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
           <h3 style={{ margin: 0 }}>Results</h3><span className="badge b-neutral">{s.rowsInFile} rows processed</span>
           <button className="small" onClick={csv}>CSV</button>
           <button className="small primary" onClick={onDownload}>Underwriting workbook</button>
-          <button className="small" onClick={() => setView(view === 'proposal' ? 'results' : 'proposal')}>{view === 'proposal' ? 'Back to results' : 'Proposal'}</button>
-          <button className="small" onClick={onSave}>{saveLabel}</button>
+          <button className="small" onClick={() => setView(view === 'proposal' ? 'results' : 'proposal')}>{view === 'proposal' ? 'Back to results' : 'Printable summary'}</button>
           <button className="small" disabled title="Next step: connect the app to Pipedrive">Send to Pipedrive</button>
           {busy && <span className="muted small">{busy}</span>}
         </div>
@@ -338,6 +377,7 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
                       <tr><td colSpan={cols.length + 1} style={{ background: 'var(--fg-tint)' }}>
                         <div className="muted small">Row {e.row.rowNumber} · {e.row.company} · ID {e.row.employeeId} · {e.frequency} · {e.hoursPerPeriod ?? '?'} hrs/period ({e.hoursPerWeek ?? '?'} /wk)</div>
                         {e.reasons.map((r: string, i: number) => <div key={i}><b>Why:</b> {r}</div>)}
+                        {editable && <OverrideEditor e={e} onChange={(o: any) => onOverride(e.key, o)} busy={!!busy} partTime={result.settings.partTime} />}
                         {e.check && (
                           <table style={{ maxWidth: 760, margin: '8px 0' }}>
                             <thead><tr><th>Per check</th><th className="num">Before</th><th className="num">With First Gen</th><th>Full year</th><th className="num">Before</th><th className="num">With First Gen</th></tr></thead>
@@ -409,5 +449,142 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
         </div>
       )}
     </>
+  );
+}
+
+/** Reviewer decision for one row: leave out, force a plan, change the deduction or hours. Recalculates right away. */
+function OverrideEditor({ e, onChange, busy, partTime }: any) {
+  const [o, setO] = useState<any>(e.override ?? {});
+  useEffect(() => setO(e.override ?? {}), [e.key, e.override]);
+  const changed = JSON.stringify(o) !== JSON.stringify(e.override ?? {});
+  return (
+    <div className="fg-callout" style={{ flexDirection: 'column', margin: '10px 0', maxWidth: '58rem' }}>
+      <b>Reviewer decision</b>
+      <div className="row" style={{ alignItems: 'flex-end' }}>
+        <label>Plan<select value={o.exclude ? 'exclude' : o.status ?? ''} onChange={(x) => setO(x.target.value === 'exclude' ? { ...o, exclude: true, status: undefined } : { ...o, exclude: undefined, status: x.target.value || undefined })}>
+          <option value="">Follow the rules</option><option value="Eligible">Full plan (eligible)</option><option value="PT Eligible">Part-time plan ({money(partTime?.deductionPerCheck)}/check)</option><option value="Not Eligible">Not eligible</option><option value="exclude">Leave out of the proposal</option>
+        </select></label>
+        <label>Deduction per check ($)<input style={{ width: 130 }} type="number" step="0.01" value={o.deductionPerCheck ?? ''} placeholder={String(e.deductionPerCheck ?? e.perPeriod?.firstGen ?? '')} onChange={(x) => setO({ ...o, deductionPerCheck: x.target.value === '' ? undefined : Number(x.target.value) })} /></label>
+        <label>Hours per period<input style={{ width: 110 }} type="number" value={o.hoursPerPeriod ?? ''} placeholder={String(e.row.hoursPerPeriod ?? '')} onChange={(x) => setO({ ...o, hoursPerPeriod: x.target.value === '' ? undefined : Number(x.target.value) })} /></label>
+        <label style={{ flex: 1, minWidth: 200 }}>Note<input value={o.note ?? ''} onChange={(x) => setO({ ...o, note: x.target.value || undefined })} placeholder="Why (kept with the proposal)" /></label>
+        <button className="small primary" disabled={!changed || busy} onClick={() => onChange(o)}>Apply and recalculate</button>
+        {e.override && <button className="small" disabled={busy} onClick={() => onChange(undefined)}>Clear</button>}
+      </div>
+    </div>
+  );
+}
+
+const REPORT_COLS: [string, string][] = [['state', 'State'], ['plan', 'Plan'], ['deduction', 'Deduction per check'], ['employeeSavings', 'Employee savings per month'], ['employerSavings', 'Employer savings per year']];
+
+/** Edit what the client sees, preview it, and publish fresh links. */
+function ClientPage({ id, dirty, repeats, reportSettings: rs, setReportSettings, onSave, canShare, editable }: any) {
+  const [preview, setPreview] = useState<any>();
+  const [links, setLinks] = useState<any[]>([]);
+  const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
+  const loadLinks = () => id && api(`/proposals/${id}/reports`).then(setLinks);
+  useEffect(() => { void loadLinks(); }, [id]);
+  useEffect(() => {
+    if (!id || !rs) return;
+    const t = setTimeout(() => api(`/proposals/${id}/report-preview`, { json: { reportSettings: rs } }).then(setPreview).catch((e) => setErr(e.message)), 250);
+    return () => clearTimeout(t);
+  }, [id, JSON.stringify(rs)]);
+  if (!id) return <div className="panel"><h3>Client page</h3><p className="fg-note">Save the proposal first. The client page uses the saved numbers, so what you send matches what is in the queue.</p></div>;
+  if (!rs) return <p className="muted">Loading…</p>;
+  const set = (p: any) => setReportSettings({ ...rs, ...p });
+  const publish = async () => {
+    setErr(''); setMsg('');
+    try {
+      if (dirty) await onSave();
+      const r = await api(`/proposals/${id}/reports`, { json: editable ? { reportSettings: rs } : {} });
+      const url = `${location.origin}${r.url}`;
+      void navigator.clipboard?.writeText(url)?.catch(() => {});
+      setMsg(`Published a fresh link and copied it: ${url}`);
+      void loadLinks();
+    } catch (e: any) { setErr(e.message); }
+  };
+  const revoke = async (slug: string) => { if (!confirm('Turn this link off? Anyone who opens it will see that it is no longer active.')) return; await api(`/proposals/${id}/reports/${slug}`, { method: 'DELETE' }); void loadLinks(); };
+  return (
+    <div className="fg-cards" style={{ gridTemplateColumns: 'minmax(18rem, 26rem) minmax(0, 1fr)', alignItems: 'start' }}>
+      <div>
+        <div className="panel">
+          <h3>Links</h3>
+          <p className="fg-note">Each publish makes a fresh link with today's saved numbers. Links already sent keep their numbers until you turn them off.</p>
+          {repeats > 0 && <div className="warn" style={{ marginBottom: 12 }}>{repeats} rows repeat an employee and are counted separately, so the client would see the same person more than once. Turn on "Count repeated employees once" under eligibility requirements before you publish.</div>}
+          {err && <div className="err" style={{ marginBottom: 12 }}>{err}</div>}
+          {msg && <div className="fg-callout" style={{ marginBottom: 12, wordBreak: 'break-all' }}>{msg}</div>}
+          {canShare && <button className="primary" style={{ width: '100%' }} onClick={publish}>{dirty ? 'Save and publish a fresh link' : 'Publish a fresh link'}</button>}
+          <div className="fg-tablebox" style={{ marginTop: 12 }}><table><tbody>{links.map((l) => (
+            <tr key={l.slug}>
+              <td><a href={`/r/${l.slug}`} target="_blank" rel="noreferrer" className="small">/r/{l.slug}</a><div className="muted small">{new Date(l.created_at).toLocaleString()} · {l.created_by_name ?? ''} · {l.views} views</div></td>
+              <td style={{ whiteSpace: 'nowrap' }}>{l.revoked_at ? <span className="badge b-bad">Off</span> : <>{' '}<button className="small" onClick={() => { void navigator.clipboard?.writeText(`${location.origin}/r/${l.slug}`)?.catch(() => {}); setMsg('Link copied.'); }}>Copy</button>{canShare && <> <button className="small" onClick={() => revoke(l.slug)}>Turn off</button></>}</>}</td>
+            </tr>
+          ))}{!links.length && <tr><td className="muted small">No links yet.</td></tr>}</tbody></table></div>
+        </div>
+        <div className="panel">
+          <h3>What the client sees</h3>
+          <fieldset disabled={!editable} style={{ border: 0, padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <label>Title<input maxLength={200} value={rs.title ?? ''} placeholder={preview?.title} onChange={(e) => set({ title: e.target.value || undefined })} /></label>
+            <label>Presented by<input maxLength={120} value={rs.presentedBy} onChange={(e) => set({ presentedBy: e.target.value })} /></label>
+            <label>Subtitle<input maxLength={160} value={rs.subtitle} onChange={(e) => set({ subtitle: e.target.value })} /></label>
+            <label>Opening note (optional)<textarea maxLength={2000} value={rs.intro} onChange={(e) => set({ intro: e.target.value })} placeholder="A sentence or two for this client" /></label>
+            <label>Employee section<select value={rs.showEmployees} onChange={(e) => set({ showEmployees: e.target.value })}><option value="list">List eligible employees</option><option value="counts">Counts by status only</option><option value="none">Leave out</option></select></label>
+            {rs.showEmployees === 'list' && <div><div className="fg-label" style={{ marginBottom: 4 }}>Employee columns</div>{REPORT_COLS.map(([k, l]) => <label key={k} className="check"><input type="checkbox" checked={rs.employeeColumns.includes(k)} onChange={(e) => set({ employeeColumns: e.target.checked ? [...rs.employeeColumns, k] : rs.employeeColumns.filter((c: string) => c !== k) })} />{l}</label>)}</div>}
+            <label className="check"><input type="checkbox" checked={rs.showValuation} onChange={(e) => set({ showValuation: e.target.checked })} />Show the valuation increase</label>
+            <label className="check"><input type="checkbox" checked={rs.showCompanies} onChange={(e) => set({ showCompanies: e.target.checked })} />Break out each company (multi-company files)</label>
+            <label className="check"><input type="checkbox" checked={rs.showSource} onChange={(e) => set({ showSource: e.target.checked })} />Show the name of the file the numbers came from</label>
+            {rs.steps.map((st: any, i: number) => (
+              <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <label>Step {i + 1}<input maxLength={120} value={st.title} onChange={(e) => set({ steps: rs.steps.map((x: any, j: number) => (j === i ? { ...x, title: e.target.value } : x)) })} /></label>
+                <textarea aria-label={`Step ${i + 1} text`} maxLength={600} style={{ minHeight: 64 }} value={st.text} onChange={(e) => set({ steps: rs.steps.map((x: any, j: number) => (j === i ? { ...x, text: e.target.value } : x)) })} />
+                <button type="button" className="fg-link small" style={{ alignSelf: 'flex-start' }} onClick={() => set({ steps: rs.steps.filter((_: any, j: number) => j !== i) })}>Remove step {i + 1}</button>
+              </div>
+            ))}
+            {rs.steps.length < 6 && <button type="button" className="small" style={{ alignSelf: 'flex-start' }} onClick={() => set({ steps: [...rs.steps, { title: '', text: '' }] })}>Add a step</button>}
+            <label>Next-steps heading<input maxLength={160} value={rs.ctaHeading} onChange={(e) => set({ ctaHeading: e.target.value })} /></label>
+            <label>Next-steps text<input maxLength={600} value={rs.ctaText} onChange={(e) => set({ ctaText: e.target.value })} /></label>
+            <label>Button label<input maxLength={80} value={rs.ctaLabel} onChange={(e) => set({ ctaLabel: e.target.value })} /></label>
+            <label>Button link (paperwork URL; blank emails the contact address)<input maxLength={500} value={rs.ctaUrl} onChange={(e) => set({ ctaUrl: e.target.value })} placeholder="https://" /></label>
+            <label>Contact email<input maxLength={200} value={rs.contactEmail} onChange={(e) => set({ contactEmail: e.target.value })} /></label>
+            <label>Address<input maxLength={300} value={rs.address} onChange={(e) => set({ address: e.target.value })} /></label>
+            <label>Disclaimer<textarea maxLength={4000} value={rs.disclaimer} onChange={(e) => set({ disclaimer: e.target.value })} /></label>
+          </fieldset>
+        </div>
+      </div>
+      <div className="panel" style={{ position: 'sticky', top: 24 }}>
+        <h3>Preview</h3>
+        <p className="fg-note">How the published link will look, with the saved numbers{dirty ? ' (save to include your latest changes)' : ''}.</p>
+        <div className="fg-preview-frame">{preview ? <ReportView r={preview} preview /> : <span className="muted">Loading…</span>}</div>
+      </div>
+    </div>
+  );
+}
+
+/** Every save and recalculation, with the headline numbers, so you can go back to an earlier set of rules. */
+function History({ id, onLoad, editable }: any) {
+  const [rows, setRows] = useState<any[]>();
+  useEffect(() => { api(`/proposals/${id}/revisions`).then(setRows); }, [id]);
+  return (
+    <div className="panel">
+      <h3>Versions</h3>
+      <p className="fg-note">Each save or recalculation is kept. Load an older version's rules to recalculate with them, then save if you want to keep it.</p>
+      <div className="fg-tablebox tall"><table>
+        <thead><tr><th>When</th><th>Who</th><th>What</th><th className="num">Eligible</th><th className="num">Employer savings / yr</th><th className="num">Valuation</th><th>Rules</th><th /></tr></thead>
+        <tbody>{(rows ?? []).map((r) => (
+          <tr key={r.id}>
+            <td className="small" style={{ whiteSpace: 'nowrap' }}>{new Date(r.at).toLocaleString()}</td>
+            <td>{r.user_name ?? '—'}</td>
+            <td>{r.label}</td>
+            <td className="num">{r.summary?.eligibleTotal ?? '—'}</td>
+            <td className="num">{money(r.summary?.employerAnnualSavings?.total)}</td>
+            <td className="num">{money(r.summary?.valuationIncrease)}</td>
+            <td className="small muted">{money(r.settings.allotmentThreshold)} price · {money(r.settings.deductionPerCheck)}/check · {Math.round((r.settings.participationRate ?? 1) * 100)}% enroll · {Object.keys(r.settings.overrides ?? {}).length} overrides</td>
+            <td>{editable && <button className="small" onClick={() => onLoad(r.settings)}>Load these rules</button>}</td>
+          </tr>
+        ))}
+          {rows && !rows.length && <tr><td colSpan={8} className="muted">No versions yet.</td></tr>}
+        </tbody>
+      </table></div>
+    </div>
   );
 }

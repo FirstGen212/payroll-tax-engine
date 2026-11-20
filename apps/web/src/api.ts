@@ -2,10 +2,12 @@ export async function api<T = any>(path: string, init?: RequestInit & { json?: u
   const res = await fetch(`/api${path}`, {
     ...init,
     method: init?.method ?? (init?.json !== undefined ? 'POST' : 'GET'),
-    headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
+    headers: { ...(init?.json !== undefined ? { 'content-type': 'application/json' } : {}), ...(init?.headers ?? {}) },
     body: init?.json !== undefined ? JSON.stringify(init.json) : init?.body,
   });
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && !path.startsWith('/auth/')) window.dispatchEvent(new Event('auth:required'));
+  if (res.status === 403) window.dispatchEvent(new CustomEvent('auth:forbidden', { detail: data.error ?? 'You do not have permission to do this.' }));
   if (!res.ok) throw new Error(data.error ?? res.statusText);
   return data as T;
 }

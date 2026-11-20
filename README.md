@@ -10,7 +10,10 @@ TypeScript + PostgreSQL. Tax year 2027 is primary; every rule is effective-dated
 |---|---|
 | **Tax database** (`packages/tax-data`) | Federal, all 50 states, DC, and 5 territories (PR, GU, VI, AS, MP) plus a starter set of local jurisdictions. Every rule carries an effective date range, a **verification status** and **source citations**. |
 | **Engine** (`packages/engine`) | Pub 15-T percentage method (2020+ and pre-2020 W-4s, Step 2, NRA), supplemental flat/aggregate with the $1M rule, FICA/Additional Medicare/FUTA with credit reduction, state formulas, multi-state (reciprocity, resident credit, wage allocation, convenience of employer), locals (PA Act 32 + LST, Philadelphia, Ohio cities + school districts with resident credit, NYC, Yonkers, MD counties, IN counties, MI/KY/MO/AL, CO OPT, OR transit), SUI/SDI/PFL/PFML/WA Cares, territories, pre/post-tax deductions with IRS limits and catch-ups, public pension pick-ups (Texas TRS etc.), garnishments with CCPA limits, and a full audit trail on every line. |
-| **Proposal tool** (`/proposals`) | Upload a census, underwriting sheet or payroll sample (.xlsx/.csv), auto-map its columns, set pricing tiers (deduction, benefit payment back, employer and employee fees) and eligibility rules, then compare every employee's taxes and take-home pay for a full plan year before and after the new pre-tax deduction. Results: eligibility breakdown, before/after totals, per-employee detail, a printable client proposal, and the underwriting workbook with Before Taxes / After Taxes / Monthly Allotment / Eligibility filled in. |
+| **Proposal tool** (`/proposals`) | Upload a census, underwriting sheet or payroll sample (.xlsx/.csv), auto-map its columns, set pricing tiers (deduction, benefit payment back, employer and employee fees) and eligibility rules, then compare every employee's taxes and take-home pay for a full plan year before and after the new pre-tax deduction. Results: eligibility breakdown, before/after totals, per-employee detail and the underwriting workbook with Before Taxes / After Taxes / Monthly Allotment / Eligibility filled in. A reviewer can override any row (leave out, force a plan, change the deduction or hours, with a note) and set the share of eligible employees expected to enroll. |
+| **Proposal queue** | Every saved proposal with its status (draft, in review, completed, sent, won, lost), owner, headline numbers and client link. Reopen one to change the rules, recalculate it with today's tax data, copy it, or load an earlier version from its history. |
+| **Client proposal page** (`/r/<company>-<random>`) | The page a client sees, built from [docs/DESIGN.md](docs/DESIGN.md): savings, valuation, implementation steps, eligible employees, next steps, Download PDF. Its text and sections are edited per proposal with a live preview. Each publish makes a fresh link holding a snapshot of the numbers, so a link already sent never changes; a link can be turned off. No sign-in is needed to open one, so the random part is 64 bits and pages are marked noindex. |
+| **Users and access** (`/admin`) | Accounts with a role (admin, manager, analyst, viewer) plus per-person permission changes, "view as" another user, and an audit log of sign-ins, changes and view-as sessions. |
 | **Vendor profiles** | ADP, Paychex, Viventium, Empeon, Paycor, Paylocity profiles capture calculation conventions (rounding, supplemental method, FICA true-up, deduction base...). The **learner** searches those conventions against sample paychecks to work out how a provider calculates. |
 | **API** (`apps/api`) | Fastify + Postgres. Clients, work locations, tax toggles and SUI rates, employees with federal and state W-4s, recurring deductions, pay runs, YTD, scenario comparisons, vendor learning, rule editing with history. |
 | **Web app** (`apps/web`) | Clients, employee setup, pay run screen, tax setup and toggles, tax research database with status/coverage, paycheck calculator with Section 125 savings comparison, vendor profiles. |
@@ -40,14 +43,25 @@ npm run db:seed                    # creates schema and loads the tax database
 npm run seed:demo -w apps/api      # optional: three fictional demo clients
 npm run dev:api                    # http://localhost:4000
 npm run dev:web                    # http://localhost:5173
-npm test                           # engine audit tests
+npm test                           # engine audit tests, sign-in and permission tests, client-page tests
 ```
 
 `npm run build -w apps/web` then `npm start -w apps/api` serves the built UI from the API on one port.
 
+The first visit asks you to create the admin account. Locally that needs nothing else; when `APP_PASSWORD` is set (and always when hosted) it also asks for that value as a setup key. The admin adds everyone else under **Admin**.
+
 ## Deploy to Render
 
-`render.yaml` is a Render Blueprint: one web service (API plus the built web app) and a Postgres database. In Render choose **New > Blueprint**, pick this repository and branch, and apply. Each start runs the seed (schema plus tax database; safe to re-run, client data is kept). The app asks for a sign-in when `APP_PASSWORD` is set: user `firstgen`, password generated by Render under the service's Environment tab.
+`render.yaml` is a Render Blueprint: one web service (API plus the built web app) and a Postgres database. In Render choose **New > Blueprint**, pick this repository and branch, and apply. Each start runs the seed (schema plus tax database; safe to re-run, client data is kept). The first visit asks you to create the admin account and needs the setup key: the `APP_PASSWORD` value Render generated, under the service's Environment tab. After that everyone signs in with their own email and password.
+
+## Users, access and client links
+
+- **Roles** are starting sets of permissions: admin (everything), manager (everyone's proposals and clients, tax rules, the audit log), analyst (their own proposals, mock payroll, client links), viewer (read-only). Tick or untick single permissions for one person on their Edit form.
+- Nobody can give out, or change, access above their own, and the app always keeps at least one active person who can manage users.
+- **View as** shows the app exactly as another user sees it. It never gives more access than the signed-in person has, a banner stays on screen until it is stopped, and the audit log records both people on every change.
+- **Access rules live in one place:** `requiredPermission` in `apps/api/src/auth.ts`, keyed by route. A new route that changes data is refused until it has a rule there (and a row in `apps/api/test/auth.test.ts`).
+- Passwords are stored as scrypt hashes, sessions as a hash of a random cookie token (httpOnly, 14 days), and ten wrong passwords lock that account's sign-in for 15 minutes.
+- Other sites cannot call the API unless `CORS_ORIGIN` lists them.
 
 ## Loading the full local jurisdiction lists
 
