@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, money } from '../api';
-import { StateSelect, useReference } from '../components';
+import { PageHead, StateSelect, useReference } from '../components';
 
 const FIELD_LABELS: Record<string, string> = {
   company: 'Company Name', employeeId: 'Employee ID', firstName: 'First Name', lastName: 'Last Name', workState: 'Work State', residenceState: 'Residence State',
@@ -16,7 +16,7 @@ const FIELD_LABELS: Record<string, string> = {
 const REQUIRED = ['grossPay', 'payFrequency', 'workState', 'federalFilingStatus'];
 const ORDER = ['Eligible', 'PT Eligible', 'No Federal Taxes Paid', 'NEEDS REVIEW', 'Not Eligible - Insufficient Savings', 'Not Eligible - Insufficient Savings + No Federal Taxes Paid', 'Not Eligible - Low Income', 'Not Eligible - Insufficient Hours', 'Not Eligible - Insufficient Funds', 'Not Eligible - No Gross Compensation'];
 const SHORT = (e: string) => e.replace('Not Eligible - ', '');
-const ELIG_CLASS = (e: string) => (e === 'Eligible' || e === 'PT Eligible' ? 'b-published' : e === 'NEEDS REVIEW' || e === 'No Federal Taxes Paid' ? 'b-unverified' : 'b-placeholder');
+const ELIG_CLASS = (e: string) => (e === 'Eligible' || e === 'PT Eligible' ? 'b-ok' : e === 'NEEDS REVIEW' || e === 'No Federal Taxes Paid' ? 'b-warn' : 'b-bad');
 const pctf = (n?: number) => (n === undefined || n === null ? '' : `${(n * 100).toFixed(1)}%`);
 const colLetter = (i: number) => (i < 26 ? String.fromCharCode(65 + i) : String.fromCharCode(64 + Math.floor(i / 26)) + String.fromCharCode(65 + (i % 26)));
 
@@ -125,11 +125,18 @@ export default function ProposalBuilder() {
 
   return (
     <>
+      <div className="noprint">
+        <PageHead eyebrow={<><Link to="/proposals">Proposal tool</Link> / {id ? 'Proposal' : 'New proposal'}</>} title={meta.company ?? (meta.name || 'New proposal')}>
+          {result
+            ? <><b>{result.summary.eligibleTotal}</b> of <b>{result.summary.employees}</b> employees qualify, for <b>{money(result.summary.monthlySavings.total)}</b> a month in allotments and a <b>{money(result.summary.valuationIncrease)}</b> valuation increase.</>
+            : rows.length ? <>Read <b>{rows.length}</b> rows. Check the column mapping, then calculate.</> : 'Upload a census, underwriting sheet or payroll register to compare every employee\'s taxes before and after the First Gen deduction.'}
+        </PageHead>
+      </div>
       <div className="stepper noprint">{['Import', 'Map', 'Results'].map((l, i) => <span key={l} className={step > i + 1 ? 'done' : step === i + 1 ? 'on' : ''}><b>{step > i + 1 ? '✓' : i + 1}</b>{l}</span>)}</div>
-      {err && <div className="err" style={{ marginBottom: 12 }}>{err}</div>}
+      {err && <div className="err" style={{ marginBottom: 16 }}>{err}</div>}
 
       <div className="panel noprint">
-        <div className="row" style={{ justifyContent: 'space-between' }}><b className="small muted">IMPORT SOURCE</b>{file?.fileName && <span className="muted small">{file.fileName}{sheetName ? ` · ${sheetName}` : ''}</span>}</div>
+        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'baseline' }}><h3 style={{ margin: 0 }}>Import source</h3>{file?.fileName && <span className="muted small">{file.fileName}{sheetName ? ` · ${sheetName}` : ''}</span>}</div>
         <div className="row" style={{ marginTop: 8 }}>
           <label>Census, underwriting sheet or payroll register (.xlsx or .csv)<input type="file" accept=".xlsx,.xlsm,.csv" onChange={(e) => upload(e.target.files?.[0])} /></label>
           <label style={{ minWidth: 260 }}>Proposal name<input value={meta.name} onChange={(e) => setMeta({ ...meta, name: e.target.value })} /></label>
@@ -140,13 +147,13 @@ export default function ProposalBuilder() {
 
       <div className="panel noprint">
         <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-          <span><b className="small muted">ELIGIBILITY REQUIREMENTS</b> <span className="badge b-projected">11</span> <button className="small" onClick={() => setEditReq(!editReq)}>{editReq ? 'Close' : 'Edit'}</button></span>
+          <span className="row" style={{ alignItems: 'center', gap: 8 }}><h3 style={{ margin: 0 }}>Eligibility requirements</h3><span className="badge b-neutral">11 rules</span><button className="small" onClick={() => setEditReq(!editReq)}>{editReq ? 'Close' : 'Edit'}</button></span>
           {!editReq && <span className="muted small">{settings.benefitPackages.find((p: any) => p.id === settings.benefitPackageId)?.name} package · allotment ≥ {money(settings.allotmentThreshold)} · low income ≤ {money(settings.lowIncomeMax)} · ≥ {settings.minHoursPerPeriod} hrs/period · review ≥ {money(settings.needsReviewAllotment)} · buffer {Math.round(settings.allotmentBuffer * 100)}% · deduction {money(settings.deductionPerCheck)}/check</span>}
         </div>
         {editReq && (
           <div style={{ marginTop: 12 }}>
             <label>Benefit package (preventative care tier applied to benefit cost)</label>
-            <div className="seg">{settings.benefitPackages.map((p: any) => <button key={p.id} className={settings.benefitPackageId === p.id ? 'on' : ''} onClick={() => setS({ benefitPackageId: p.id })}>{p.name} ({money(p.monthlyCost)})</button>)}</div>
+            <div className="seg" style={{ marginTop: 6 }}>{settings.benefitPackages.map((p: any) => <button key={p.id} className={settings.benefitPackageId === p.id ? 'on' : ''} onClick={() => setS({ benefitPackageId: p.id })}>{p.name} ({money(p.monthlyCost)})</button>)}</div>
             <div className="grid2" style={{ marginTop: 12 }}>
               <label>Monthly allotment threshold: minimum monthly allotment required ($)<input type="number" value={settings.allotmentThreshold} onChange={(e) => setS({ allotmentThreshold: num(e.target.value) })} /></label>
               <label>Low income threshold: annual gross at or below this is low income ($)<input type="number" value={settings.lowIncomeMax} onChange={(e) => setS({ lowIncomeMax: num(e.target.value) })} /></label>
@@ -186,19 +193,19 @@ export default function ProposalBuilder() {
       {rows.length > 0 && (
         <div className="panel noprint">
           <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-            <b>Column mapping review</b>
+            <h3 style={{ margin: 0 }}>Column mapping review</h3>
             <span className="muted small">{mappedCount}/{defaults.fields.length} fields mapped · {rows.length} rows</span>
           </div>
           {file?.sheets?.length ? <label style={{ maxWidth: 300, marginTop: 8 }}>Sheet<select value={sheetName} onChange={(e) => chooseSheet(file, e.target.value)}>{file.sheets.map((s) => <option key={s.name} value={s.name}>{s.name} ({s.rows.length} rows)</option>)}</select></label> : null}
           {missing.length > 0 && <div className="err" style={{ marginTop: 8 }}>Map these before calculating: {missing.map((m) => FIELD_LABELS[m]).join(', ')}</div>}
           <details open={!result} style={{ marginTop: 8 }}>
             <summary>Fields</summary>
-            <div style={{ maxHeight: 380, overflowY: 'auto' }}>
+            <div className="fg-tablebox tall">
               <table>
                 <thead><tr><th>Field</th><th>Mapped column</th><th>Sample values</th></tr></thead>
                 <tbody>{defaults.fields.map((f: string) => (
                   <tr key={f}>
-                    <td>{mapping[f] ? <span style={{ color: 'var(--ok)' }}>✓ </span> : <span className="muted">· </span>}{FIELD_LABELS[f] ?? f}{REQUIRED.includes(f) && <span className="muted"> *</span>}</td>
+                    <td>{mapping[f] ? <span className="fg-ok-text" aria-label="mapped">✓ </span> : <span className="muted">· </span>}{FIELD_LABELS[f] ?? f}{REQUIRED.includes(f) && <span className="muted"> *</span>}</td>
                     <td><select value={mapping[f] ?? ''} onChange={(e) => setMapping({ ...mapping, [f]: e.target.value })}><option value="">(not in file)</option>{headers.map((h, i) => <option key={h} value={h}>{colLetter(i)}: {h}</option>)}</select></td>
                     <td className="muted small">{mapping[f] ? rows.slice(0, 3).map((r) => String(r[mapping[f]] ?? '–')).join(' · ') : ''}</td>
                   </tr>
@@ -260,9 +267,9 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
     <>
       <div className="panel noprint">
         <div className="row" style={{ alignItems: 'center' }}>
-          <b style={{ fontSize: 16 }}>Results</b><span className="badge b-projected">{s.rowsInFile} processed</span>
+          <h3 style={{ margin: 0 }}>Results</h3><span className="badge b-neutral">{s.rowsInFile} rows processed</span>
           <button className="small" onClick={csv}>CSV</button>
-          <button className="small" onClick={onDownload}>Underwriting workbook</button>
+          <button className="small primary" onClick={onDownload}>Underwriting workbook</button>
           <button className="small" onClick={() => setView(view === 'proposal' ? 'results' : 'proposal')}>{view === 'proposal' ? 'Back to results' : 'Proposal'}</button>
           <button className="small" onClick={onSave}>{saveLabel}</button>
           <button className="small" disabled title="Next step: connect the app to Pipedrive">Send to Pipedrive</button>
@@ -280,29 +287,29 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
       {view === 'results' && (
         <>
           <div className="panel">
-            <b>Margin strategy analyzer</b><div className="muted small">Click a program to see eligibility at that price point. Margin = price − {s.benefitPackage?.name} benefit cost ({money(s.benefitPackage?.monthlyCost)}) per eligible employee per month.</div>
-            <table style={{ marginTop: 8 }}>
+            <h3>Margin strategy analyzer</h3><div className="fg-note">Click a program to see eligibility at that price point. Margin = price − {s.benefitPackage?.name} benefit cost ({money(s.benefitPackage?.monthlyCost)}) per eligible employee per month.</div>
+            <div className="fg-tablebox"><table>
               <thead><tr><th>Program</th><th className="num">Eligible</th><th className="num">Monthly revenue</th><th className="num">Benefit cost</th><th className="num">Margin %</th><th className="num">12-month margin</th></tr></thead>
               <tbody>{s.programs.map((p: any) => (
-                <tr key={p.price} style={{ cursor: 'pointer', background: p.price === result.settings.allotmentThreshold ? 'var(--info-bg)' : undefined }} onClick={() => onPickProgram(p.price)}>
-                  <td><span className="badge b-projected" style={{ fontSize: 13 }}>{money(p.price)}</span>{p.price === result.settings.allotmentThreshold && <span className="small"> Current · Active</span>}{best?.price === p.price && <span className="small" style={{ color: 'var(--ok)' }}> Best</span>}</td>
+                <tr key={p.price} className={p.price === result.settings.allotmentThreshold ? 'fg-sel' : undefined} style={{ cursor: 'pointer' }} onClick={() => onPickProgram(p.price)}>
+                  <td><b>{money(p.price)}</b> {p.price === result.settings.allotmentThreshold && <span className="badge b-primary">Current</span>} {best?.price === p.price && <span className="badge b-green">Best margin</span>}</td>
                   <td className="num">{p.eligible}</td><td className="num">{money(p.monthlyRevenue)}</td><td className="num">{money(p.monthlyBenefitCost)}</td><td className="num">{pctf(p.marginPercent)}</td><td className="num">{money(p.annualMargin)}</td>
                 </tr>
               ))}</tbody>
-            </table>
+            </table></div>
           </div>
 
           <div className="kpis">
-            <div className="kpi"><div className="l">ELIGIBILITY</div><div className="v">{s.eligibleTotal} <span className="muted" style={{ fontSize: 14 }}>/ {s.employees}</span></div>
-              <div className="bar"><span style={{ width: `${(s.eligibleFull / s.employees) * 100}%`, background: 'var(--ok)' }} /><span style={{ width: `${(s.eligiblePartTime / s.employees) * 100}%`, background: 'var(--warn)' }} /></div>
-              <div className="muted small">{s.eligibleFull} full plan + {s.eligiblePartTime} part-time</div></div>
-            <div className="kpi"><div className="l">MONTHLY SAVINGS</div><div className="v" style={{ color: 'var(--ok)' }}>{money(s.monthlySavings.total)}</div>
-              <div className="muted small">{money(s.monthlySavings.full)} full + {money(s.monthlySavings.partTime)} PT · Avg {money(s.monthlySavings.average)} · Annual {money(s.monthlySavings.annual)}</div></div>
-            <div className="kpi"><div className="l">VALUATION INCREASE</div><div className="v">{money(s.valuationIncrease)}</div>
-              <div className="muted small">{money(s.employerAnnualSavings.total)} employer savings × {result.settings.ebitdaMultiple}x EBITDA · incl. {money(s.employerAnnualSavings.partTime)} PT</div></div>
-            <div className="kpi"><div className="l">ALLOTMENT DISTRIBUTION</div>
-              <div className="bar tall"><span style={{ width: `${(dist.below / distTotal) * 100}%`, background: 'var(--bad)' }}>{dist.below}</span><span style={{ width: `${(dist.near / distTotal) * 100}%`, background: 'var(--warn)' }}>{dist.near}</span><span style={{ width: `${(dist.atOrAbove / distTotal) * 100}%`, background: 'var(--ok)' }}>{dist.atOrAbove}</span></div>
-              <div className="muted small">&lt;{money(dist.lowEdge)} · {money(dist.lowEdge)}–{money(dist.highEdge)} · {money(dist.highEdge)}+</div></div>
+            <div className="kpi"><div className="l">Eligible employees</div><div className="v">{s.eligibleTotal} <span className="s" style={{ fontSize: '1rem' }}>of {s.employees}</span></div>
+              <div className="fg-bar"><span style={{ width: `${(s.eligibleFull / s.employees) * 100}%` }} /><span style={{ width: `${(s.eligiblePartTime / s.employees) * 100}%` }} /></div>
+              <div className="fg-legend"><span><i />Full plan <b>{s.eligibleFull}</b></span><span><i className="muted-fill" />Part-time <b>{s.eligiblePartTime}</b></span></div></div>
+            <div className="kpi"><div className="l">Monthly allotments</div><div className="v">{money(s.monthlySavings.total)}</div>
+              <div className="s">Average <b>{money(s.monthlySavings.average)}</b> · Annual <b>{money(s.monthlySavings.annual)}</b></div><div className="s">{money(s.monthlySavings.full)} full plan + {money(s.monthlySavings.partTime)} part-time</div></div>
+            <div className="kpi"><div className="l">Valuation increase</div><div className="v">{money(s.valuationIncrease)}</div>
+              <div className="s"><b>{money(s.employerAnnualSavings.total)}</b> employer savings a year × {result.settings.ebitdaMultiple}x EBITDA</div></div>
+            <div className="kpi"><div className="l">Allotment distribution</div>
+              <div className="fg-bar tall"><span className="critical" style={{ width: `${(dist.below / distTotal) * 100}%` }} /><span className="muted-fill" style={{ width: `${(dist.near / distTotal) * 100}%` }} /><span style={{ width: `${(dist.atOrAbove / distTotal) * 100}%` }} /></div>
+              <div className="fg-legend"><span><i className="critical" />Under {money(dist.lowEdge)} <b>{dist.below}</b></span><span><i className="muted-fill" />{money(dist.lowEdge)}–{money(dist.highEdge)} <b>{dist.near}</b></span><span><i />{money(dist.highEdge)}+ <b>{dist.atOrAbove}</b></span></div></div>
           </div>
           {s.duplicates?.length > 0 && <div className="warn">{s.duplicates.length} of {s.rowsInFile} rows repeat an employee already in the file (same company, ID and name), for example {s.duplicates.slice(0, 2).map((d: any) => `${d.name} on row ${d.rowNumber}`).join(' and ')}. {result.settings.dedupe ? 'They are counted once.' : 'They are counted as separate rows; turn on "Count repeated employees once" under eligibility requirements to count each person once.'}</div>}
           {result.unmatchedMunicipalities?.length > 0 && <div className="warn">Municipalities with no matching local tax jurisdiction (no local tax calculated): {result.unmatchedMunicipalities.join(', ')}</div>}
@@ -313,22 +320,22 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
               <label>Status<select value={filter} onChange={(e) => setFilter(e.target.value)}><option value="">All status</option>{ORDER.filter((k) => s.byEligibility[k]).map((k) => <option key={k} value={k}>{SHORT(k)} ({s.byEligibility[k]})</option>)}</select></label>
               <label>State<select value={stateF} onChange={(e) => setStateF(e.target.value)}><option value="">All states</option>{states.map((x) => <option key={x}>{x}</option>)}</select></label>
             </div>
-            <div style={{ overflowX: 'auto' }}>
+            <div className="fg-tablebox">
               <table>
                 <thead><tr><th style={{ width: 18 }} />{cols.map(([k, l, , t]) => <th key={k} className={t === 'text' ? '' : 'num'} style={{ cursor: 'pointer' }} onClick={() => setSort({ k, d: sort.k === k ? (-sort.d as 1 | -1) : 1 })}>{l}{sort.k === k ? (sort.d === 1 ? ' ▲' : ' ▼') : ''}</th>)}</tr></thead>
                 <tbody>{pageRows.map((e: any) => (
                   <Fragment key={e.key}>
-                    <tr style={{ cursor: 'pointer', boxShadow: e.eligibility === 'Eligible' ? 'inset 3px 0 var(--ok)' : undefined }} onClick={() => setOpen(open === e.key ? undefined : e.key)}>
+                    <tr style={{ cursor: 'pointer' }} className={open === e.key ? 'fg-sel' : undefined} onClick={() => setOpen(open === e.key ? undefined : e.key)}>
                       <td className="muted">{open === e.key ? '▾' : '›'}</td>
                       {cols.map(([k, , f, t]) => {
                         const v = f(e);
-                        if (k === 'name') return <td key={k}>{v}{e.flags.some((x: string) => x.startsWith('⚠')) && <span title="No federal tax withheld" style={{ color: 'var(--warn)' }}> ⚠</span>}</td>;
+                        if (k === 'name') return <td key={k}>{v}{e.flags.some((x: string) => x.startsWith('⚠')) && <> <span className="badge b-warn" title="No federal tax withheld in the file">No fed tax</span></>}</td>;
                         if (k === 'elig') return <td key={k}><span className={`badge ${ELIG_CLASS(v)}`}>{SHORT(v)}</span></td>;
-                        return <td key={k} className={t === 'text' ? '' : 'num'} style={k === 'allot' ? { color: 'var(--info)', fontWeight: 600 } : undefined}>{t === 'money' ? money(v) : t === 'pct' ? pctf(v) : v}</td>;
+                        return <td key={k} className={t === 'text' ? '' : 'num'} style={k === 'allot' ? { fontWeight: 700 } : undefined}>{t === 'money' ? money(v) : t === 'pct' ? pctf(v) : v}</td>;
                       })}
                     </tr>
                     {open === e.key && (
-                      <tr><td colSpan={cols.length + 1} style={{ background: 'var(--bg)' }}>
+                      <tr><td colSpan={cols.length + 1} style={{ background: 'var(--fg-tint)' }}>
                         <div className="muted small">Row {e.row.rowNumber} · {e.row.company} · ID {e.row.employeeId} · {e.frequency} · {e.hoursPerPeriod ?? '?'} hrs/period ({e.hoursPerWeek ?? '?'} /wk)</div>
                         {e.reasons.map((r: string, i: number) => <div key={i}><b>Why:</b> {r}</div>)}
                         {e.check && (
@@ -346,7 +353,7 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
                     )}
                   </Fragment>
                 ))}
-                  <tr style={{ fontWeight: 700 }}><td /><td>TOTALS</td><td /><td className="num">{money(tot((e) => e.annualGross))}</td><td className="num">{money(tot((e) => e.perPeriod?.firstGen))}</td><td className="num">{money(tot((e) => e.perPeriod?.deductions))}</td><td className="num">{money(tot((e) => e.perPeriod?.net))}</td><td className="num">{money(tot((e) => e.perPeriod?.taxBefore))}</td><td className="num">{money(tot((e) => e.perPeriod?.taxAfter))}</td><td className="num">{money(tot((e) => (e.eligibility === 'Eligible' ? e.monthly?.allotment : 0)))}</td><td /><td /></tr>
+                  <tr className="fg-all"><td /><td>Totals</td><td /><td className="num">{money(tot((e) => e.annualGross))}</td><td className="num">{money(tot((e) => e.perPeriod?.firstGen))}</td><td className="num">{money(tot((e) => e.perPeriod?.deductions))}</td><td className="num">{money(tot((e) => e.perPeriod?.net))}</td><td className="num">{money(tot((e) => e.perPeriod?.taxBefore))}</td><td className="num">{money(tot((e) => e.perPeriod?.taxAfter))}</td><td className="num">{money(tot((e) => (e.eligibility === 'Eligible' ? e.monthly?.allotment : 0)))}</td><td /><td /></tr>
                 </tbody>
               </table>
             </div>
@@ -358,17 +365,17 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
 
           {pt.length > 0 && (
             <div className="panel">
-              <b>Part-time eligible employees</b> <span className="badge b-projected">{pt.length}</span>
-              <div className="muted small">Rows that fail standard eligibility but qualify under the part-time plan.</div>
-              <div style={{ overflowX: 'auto' }}>
-                <table style={{ marginTop: 8 }}>
+              <h3>Part-time eligible employees <span className="badge b-neutral">{pt.length}</span></h3>
+              <div className="fg-note">Rows that fail standard eligibility but qualify under the part-time plan.</div>
+              <div className="fg-tablebox">
+                <table>
                   <thead><tr><th>#</th><th>Name</th><th>Company</th><th>State</th><th>Pay freq</th><th>Triggers</th><th>Standard result</th><th className="num">As-imported ded</th><th className="num">As-imported allotment</th><th className="num">PT ded</th><th className="num">PT allotment</th><th className="num">Savings Δ</th><th>PT status</th></tr></thead>
                   <tbody>{pt.map((e: any, i: number) => (
                     <tr key={e.key}><td>{i + 1}</td><td>{e.name}</td><td>{e.row.company}</td><td>{e.row.workState}</td><td>{e.frequency}</td>
-                      <td>{e.partTime.triggers.map((t: string) => <span key={t} className="badge b-placeholder" style={{ marginRight: 4 }}>{t}</span>)}</td>
+                      <td>{e.partTime.triggers.map((t: string) => <span key={t} className="badge b-neutral" style={{ marginRight: 4 }}>{t}</span>)}</td>
                       <td className="small">{SHORT(e.standardEligibility)}</td>
                       <td className="num">{money(e.deductionPerCheck ?? e.perPeriod?.firstGen)}</td><td className="num">{money(e.monthly?.allotment ?? 0)}</td><td className="num">{money(e.partTime.deductionPerCheck)}</td><td className="num">{money(e.partTime.allotment)}</td>
-                      <td className="num" style={{ color: e.partTime.savingsDelta < 0 ? 'var(--bad)' : 'var(--ok)' }}>{money(e.partTime.savingsDelta)}</td><td><span className="badge b-published">PT Eligible</span></td></tr>
+                      <td className="num">{money(e.partTime.savingsDelta)}</td><td><span className="badge b-ok">PT Eligible</span></td></tr>
                   ))}</tbody>
                 </table>
               </div>

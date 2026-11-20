@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api, money } from '../api';
-import { PayStub } from '../components';
+import { PageHead, PayStub } from '../components';
 
 export default function PayRunView() {
   const { runId } = useParams();
@@ -16,7 +16,9 @@ export default function PayRunView() {
   };
   return (
     <>
-      <h2>Pay run {String(run.check_date).slice(0, 10)} <span className="muted small">{run.run_type} - calculated like {run.vendor_profile_id ?? 'IRS by the book'} - <Link to={`/clients/${run.client_id}`}>back to client</Link></span></h2>
+      <PageHead eyebrow={<><Link to={`/clients/${run.client_id}`}>Client</Link> / Pay run</>} title={`Pay run ${String(run.check_date).slice(0, 10)}`}>
+        A <b>{run.run_type}</b> run for <b>{t.employees}</b> employees, calculated like <b>{run.vendor_profile_id ?? 'IRS by the book'}</b>: gross <b>{money(t.gross)}</b>, employer cost <b>{money(t.employerCost)}</b>.
+      </PageHead>
       <div className="kpis">{[['Employees', t.employees], ['Gross', money(t.gross)], ['Employee taxes', money(t.employeeTaxes)], ['Net', money(t.net)], ['Employer taxes', money(t.employerTaxes)], ['Employer cost', money(t.employerCost)]].map(([l, v]) => <div key={l} className="kpi"><div className="l">{l}</div><div className="v">{v}</div></div>)}</div>
       <div className="panel">
         <div className="row" style={{ justifyContent: 'space-between' }}><h3 style={{ margin: 0 }}>Tax liability summary</h3><button className="small" onClick={csv}>Download register CSV</button></div>

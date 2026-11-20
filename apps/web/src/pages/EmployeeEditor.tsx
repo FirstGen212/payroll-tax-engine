@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api';
-import { LocalPicker, StateSelect } from '../components';
+import { LocalPicker, PageHead, StateSelect } from '../components';
 import { DeductionRows, FederalW4Fields, StateW4Fields, WorkAllocations, TAX_TOGGLE_KINDS } from '../forms';
 
 const blank = { firstName: '', lastName: '', employeeNumber: '', birthDate: '', hireDate: '', payType: 'hourly', payRate: 0, standardHours: 80, residenceState: 'NY', residenceLocals: [] as string[], residenceZip: '', unemploymentState: '', ssCovered: true, medicareCovered: true, federalW4: { version: '2020+', filingStatus: 'single' }, stateW4: {} as Record<string, any>, taxToggles: {} as Record<string, boolean>, work: [{ state: 'NY', localCodes: [], percent: 1 }] as any[], deductions: [] as any[] };
@@ -35,7 +35,7 @@ export default function EmployeeEditor() {
   };
   return (
     <>
-      <h2>{employeeId ? `${f.firstName} ${f.lastName}` : 'New employee'}</h2>
+      <PageHead eyebrow="Employee" title={employeeId ? `${f.firstName} ${f.lastName}` : 'New employee'}>Pay, residence, work locations, W-4s and deductions used for every paycheck this employee gets.</PageHead>
       <div className="panel"><h3 style={{ marginTop: 0 }}>Employee</h3>
         <div className="row">
           <label>First name<input value={f.firstName} onChange={(e) => set({ firstName: e.target.value })} /></label>

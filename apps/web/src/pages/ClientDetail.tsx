@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api, money, pct } from '../api';
-import { Badge, LocalPicker, StateSelect } from '../components';
+import { Badge, LocalPicker, PageHead, StateSelect } from '../components';
 
 export default function ClientDetail() {
   const { id } = useParams();
@@ -12,7 +12,9 @@ export default function ClientDetail() {
   if (!client) return null;
   return (
     <>
-      <h2>{client.name} <span className="muted small">{client.fein} - {client.home_state} - {client.pay_frequency}</span></h2>
+      <PageHead eyebrow={<><Link to="/">Clients</Link> / Client</>} title={client.name}>
+        FEIN <b>{client.fein || '—'}</b>, home state <b>{client.home_state}</b>, paid <b>{client.pay_frequency}</b>{client.current_vendor ? <> through <b>{client.current_vendor}</b></> : null}.
+      </PageHead>
       <div className="tabs">
         {[['employees', 'Employees'], ['locations', 'Work locations'], ['taxes', 'Tax setup and toggles'], ['runs', 'Pay runs']].map(([k, l]) => <button key={k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>)}
       </div>

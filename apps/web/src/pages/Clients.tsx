@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
-import { StateSelect, useReference } from '../components';
+import { PageHead, StateSelect, useReference } from '../components';
 
 export default function Clients() {
   const [clients, setClients] = useState<any[]>([]);
@@ -16,18 +16,21 @@ export default function Clients() {
   };
   return (
     <>
-      <h2>Clients</h2>
+      <PageHead eyebrow="Clients" title="Employers on file">
+        <b>{clients.length}</b> {clients.length === 1 ? 'client' : 'clients'} with <b>{clients.reduce((a, c) => a + Number(c.employees ?? 0), 0)}</b> employees set up for actual, mock and proposal payroll.
+      </PageHead>
       <div className="panel">
-        <table>
+        <h3>Clients</h3>
+        <div className="fg-tablebox"><table>
           <thead><tr><th>Client</th><th>FEIN</th><th>Home state</th><th>Frequency</th><th>Current provider</th><th className="num">Employees</th></tr></thead>
           <tbody>
             {clients.map((c) => <tr key={c.id}><td><Link to={`/clients/${c.id}`}>{c.name}</Link></td><td>{c.fein}</td><td>{c.home_state}</td><td>{c.pay_frequency}</td><td>{c.current_vendor}</td><td className="num">{c.employees}</td></tr>)}
             {!clients.length && <tr><td colSpan={6} className="muted">No clients yet. Add one below.</td></tr>}
           </tbody>
-        </table>
+        </table></div>
       </div>
       <div className="panel">
-        <h3 style={{ marginTop: 0 }}>Add client (employer)</h3>
+        <h3>Add a client</h3>
         <div className="row">
           <label>Name<input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
           <label>FEIN<input value={form.fein} onChange={(e) => setForm({ ...form, fein: e.target.value })} /></label>

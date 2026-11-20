@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api, pct } from '../api';
-import { Badge, StateSelect } from '../components';
+import { Badge, PageHead, StateSelect } from '../components';
 
 function calcSummary(c: any): string {
   if (!c) return '';
@@ -39,7 +39,9 @@ export default function Research() {
   }, [cov]);
   return (
     <>
-      <h2>Tax research database</h2>
+      <PageHead eyebrow="Tax database" title="Rules by state and status">
+        {cov ? <><b>{Object.values(cov.totals).reduce((a: number, n: any) => a + Number(n), 0)}</b> tax rules, of which <b>{(cov.totals.published ?? 0) + (cov.totals.draft ?? 0)}</b> match an agency publication or draft and <b>{cov.totals.unverified ?? 0}</b> still need checking against the agency source.</> : 'Loading coverage…'}
+      </PageHead>
       {cov && <div className="kpis">{['published', 'draft', 'projected', 'unverified', 'placeholder'].map((s) => <div key={s} className="kpi"><div className="l"><Badge s={s} /></div><div className="v">{cov.totals[s] ?? 0}</div></div>)}</div>}
       <div className="panel">
         <p className="muted small">Status meanings: <b>published</b> matches a final agency document; <b>draft</b> matches an agency draft (IRS draft Pub 15-T 2027); <b>projected</b> is carried forward or estimated because the agency has not published the year; <b>unverified</b> was entered from research and must be checked against the cited agency source before live payroll; <b>placeholder</b> is structure only.</p>

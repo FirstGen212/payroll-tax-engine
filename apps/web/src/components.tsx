@@ -1,7 +1,26 @@
 import { useEffect, useState } from 'react';
 import { api, money, pct } from './api';
 
+import type { ReactNode } from 'react';
+
 export const Badge = ({ s }: { s: string }) => <span className={`badge b-${s}`}>{s}</span>;
+
+/** Page header block (docs/DESIGN.md §6): eyebrow, title, a takeaway sentence with bold numbers, optional actions. */
+export function PageHead({ eyebrow, title, children, actions }: { eyebrow: ReactNode; title: ReactNode; children?: ReactNode; actions?: ReactNode }) {
+  return (
+    <div className="fg-head">
+      <p className="fg-eyebrow">{eyebrow}</p>
+      <h1 className="fg-title">{title}</h1>
+      {children && <p className="fg-takeaway">{children}</p>}
+      {actions && <div className="fg-head-actions">{actions}</div>}
+    </div>
+  );
+}
+
+/** Stat tile; the first tile in a .kpis row is drawn as the navy hero. */
+export const Tile = ({ label, value, sub }: { label: ReactNode; value: ReactNode; sub?: ReactNode }) => (
+  <div className="kpi"><div className="l">{label}</div><div className="v">{value ?? '—'}</div>{sub && <div className="s">{sub}</div>}</div>
+);
 
 let refCache: any;
 export function useReference() {

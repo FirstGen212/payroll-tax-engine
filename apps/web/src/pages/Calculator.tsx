@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { api } from '../api';
-import { LocalPicker, PayStub, StateSelect, useReference } from '../components';
+import { LocalPicker, PageHead, PayStub, StateSelect, useReference } from '../components';
 import { DeductionRows, EarningRows, FederalW4Fields, StateW4Fields, WorkAllocations } from '../forms';
 
 /** Stateless paycheck calculator for proposals and what-ifs; no client setup needed. */
@@ -28,7 +28,7 @@ export default function Calculator() {
   };
   return (
     <>
-      <h2>Paycheck calculator</h2>
+      <PageHead eyebrow="Tools" title="Paycheck calculator">Run one check for any state and local mix, and see what a Section 125 deduction saves the employee and the employer.</PageHead>
       <div className="panel"><div className="row">
         <label>Check date<input type="date" value={f.checkDate} onChange={(e) => set({ checkDate: e.target.value })} /></label>
         <label>Frequency<select value={f.payFrequency} onChange={(e) => set({ payFrequency: e.target.value })}>{['weekly', 'biweekly', 'semimonthly', 'monthly', 'quarterly', 'annual', 'daily'].map((x) => <option key={x}>{x}</option>)}</select></label>

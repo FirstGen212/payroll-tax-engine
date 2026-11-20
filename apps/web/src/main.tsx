@@ -23,24 +23,49 @@ function ThemeSwitch() {
   const [theme, setTheme] = React.useState<Theme>(readTheme);
   const pick = (t: Theme) => { setTheme(t); applyTheme(t); try { localStorage.setItem('theme', t); } catch { /* private window */ } };
   return (
-    <div className="seg theme noprint" role="group" aria-label="Theme">
-      {(['light', 'system', 'dark'] as Theme[]).map((t) => <button key={t} className={theme === t ? 'on' : ''} onClick={() => pick(t)}>{t === 'light' ? 'Light' : t === 'dark' ? 'Dark' : 'Auto'}</button>)}
+    <div className="fg-seg theme" role="group" aria-label="Theme">
+      {(['light', 'system', 'dark'] as Theme[]).map((t) => <button key={t} aria-pressed={theme === t} onClick={() => pick(t)}>{t === 'light' ? 'Light' : t === 'dark' ? 'Dark' : 'Auto'}</button>)}
     </div>
   );
 }
 
+/** First Gen wordmark from apps/web/public/brand (never rebuilt); plain text until the files are added. */
+function Brand() {
+  const [hasLogo, setHasLogo] = React.useState(true);
+  return (
+    <div className="fg-brand">
+      {hasLogo ? (
+        <>
+          <img className="fg-logo-light" src="/brand/first-gen-wordmark-light.png" alt="First Gen" width={156} height={26} onError={() => setHasLogo(false)} />
+          <img className="fg-logo-dark" src="/brand/first-gen-wordmark-dark.png" alt="First Gen" width={156} height={26} onError={() => setHasLogo(false)} />
+        </>
+      ) : <span className="fg-app">First Gen</span>}
+      <span className="fg-appname">Payroll Tax Engine</span>
+    </div>
+  );
+}
+
+const icon = (d: string) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>;
+const NAV: [string, string, string, boolean?][] = [
+  ['/', 'Clients', 'M3 21V7l9-4 9 4v14M9 21v-6h6v6M8 10h.01M12 10h.01M16 10h.01', true],
+  ['/proposals', 'Proposal tool', 'M4 20V10M10 20V4M16 20v-7M22 20H2'],
+  ['/calculator', 'Paycheck calculator', 'M6 2h12a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zM8 6h8M8 11h.01M12 11h.01M16 11h.01M8 15h.01M12 15h.01M16 15h.01M8 19h8'],
+  ['/research', 'Tax database', 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6'],
+  ['/vendors', 'Vendor profiles', 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8'],
+];
+
 function App() {
   return (
     <BrowserRouter>
+      <div className="fg-rule" aria-hidden="true"><span /><span /><span /><span /></div>
       <div className="layout">
-        <nav className="side">
-          <h1>Payroll Tax Engine</h1>
-          <NavLink to="/" end>Clients</NavLink>
-          <NavLink to="/proposals">Proposal tool</NavLink>
-          <NavLink to="/calculator">Paycheck calculator</NavLink>
-          <NavLink to="/research">Tax database</NavLink>
-          <NavLink to="/vendors">Vendor profiles</NavLink>
-          <ThemeSwitch />
+        <nav className="fg-side" aria-label="Main">
+          <Brand />
+          {NAV.map(([to, label, d, end]) => <NavLink key={to} to={to} end={end} className="fg-tab">{icon(d)}{label}</NavLink>)}
+          <div className="fg-side-foot">
+            <span className="fg-status">Tax year 2027 data</span>
+            <ThemeSwitch />
+          </div>
         </nav>
         <main>
           <Routes>

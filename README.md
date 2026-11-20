@@ -15,6 +15,10 @@ TypeScript + PostgreSQL. Tax year 2027 is primary; every rule is effective-dated
 | **API** (`apps/api`) | Fastify + Postgres. Clients, work locations, tax toggles and SUI rates, employees with federal and state W-4s, recurring deductions, pay runs, YTD, scenario comparisons, vendor learning, rule editing with history. |
 | **Web app** (`apps/web`) | Clients, employee setup, pay run screen, tax setup and toggles, tax research database with status/coverage, paycheck calculator with Section 125 savings comparison, vendor profiles. |
 
+## Design
+
+All UI work follows the First Gen design guide in [docs/DESIGN.md](docs/DESIGN.md) (tokens, components, light and dark). [docs/DESIGN-AUDIT.md](docs/DESIGN-AUDIT.md) lists what the redesign changed and what is open.
+
 ## Verification status (read this before using numbers for live payroll)
 
 Every tax line in every paycheck shows the status of the rule that produced it:

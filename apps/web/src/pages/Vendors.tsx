@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
-import { Badge } from '../components';
+import { Badge, PageHead } from '../components';
 
 const example = `[
   {
@@ -25,7 +25,7 @@ export default function Vendors() {
   const learn = async () => { setMsg(''); const r = await api(`/vendor-profiles/${sel}/learn`, { method: 'POST', json: {} }); if (r.error) setMsg(r.error); else { setResult(r); load(); } };
   return (
     <>
-      <h2>Vendor calculation profiles</h2>
+      <PageHead eyebrow="Vendor profiles" title="How each provider calculates"><b>{rows.length}</b> provider profiles. Upload sample paychecks to learn a provider's conventions, then calculate like that provider.</PageHead>
       <div className="panel">
         <p className="muted small">Each provider follows the same tax law but differs in conventions such as rounding, supplemental method, FICA true-ups and deduction order. Upload sample paychecks from a provider, then learn its profile. Pay runs and the calculator can then calculate like that provider.</p>
         <table><thead><tr><th>Provider</th><th>Status</th><th>Samples</th><th>Conventions</th><th>Notes</th></tr></thead>

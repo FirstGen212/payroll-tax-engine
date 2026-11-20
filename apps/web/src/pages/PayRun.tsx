@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, money } from '../api';
-import { PayStub, useReference } from '../components';
+import { PageHead, PayStub, useReference } from '../components';
 import { EarningRows } from '../forms';
 
 export default function PayRun() {
@@ -38,7 +38,7 @@ export default function PayRun() {
   if (!client) return null;
   return (
     <>
-      <h2>Pay run - {client.name}</h2>
+      <PageHead eyebrow={<><Link to={`/clients/${id}`}>{client.name}</Link> / Pay run</>} title="New pay run"><b>{emps.filter((e) => include[e.id]).length}</b> of <b>{emps.length}</b> employees selected. Preview the checks, then save the run.</PageHead>
       <div className="panel">
         <div className="row">
           <label>Check date<input type="date" value={opts.checkDate} onChange={(e) => setOpts({ ...opts, checkDate: e.target.value })} /></label>
