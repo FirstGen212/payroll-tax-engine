@@ -335,3 +335,28 @@ describe('Every rule in the data', () => {
     expect(db.rules.filter((r) => r.status === 'confirmed' && r.sources.every(inside)).map((r) => r.id)).toEqual([]);
   });
 });
+
+describe('Sanity sweep across every state, status and wage level', () => {
+  const db = loadTaxDatabase();
+  const levels = [8000, 15000, 22000, 30000, 40000, 52000, 65000, 80000, 100000, 130000, 180000, 260000, 520000, 1300000];
+  it('state income tax is never negative, never falls as wages rise, and stays under 13.5% of wages', () => {
+    const problems: string[] = [];
+    for (const st of STATES) for (const date of ['2026-06-12', '2027-06-11']) for (const fs of ['single', 'mfj', 'hoh'] as const) for (const allowances of [0, 2]) {
+      let prev = -1;
+      for (const annual of levels) {
+        const r = calculatePay(base({ checkDate: date, earnings: [{ code: 'REG', amount: annual / 26 }], employee: { id: 'e', federalW4: { version: '2020+', filingStatus: fs }, residence: { state: st.code }, work: [{ state: st.code, percent: 1 }], stateW4: { [st.code]: { filingStatus: fs, allowances } } } }), db);
+        if (r.taxes.some((t) => !Number.isFinite(t.amount) || t.amount < 0)) problems.push(`${st.code} ${date} ${fs}: a tax line is negative or not a number at ${annual}`);
+        const sit = tax(r, `${st.code}.SIT`) * 26;
+        if (sit < prev - 30) problems.push(`${st.code} ${date} ${fs} ${allowances}: falls from ${prev.toFixed(0)} to ${sit.toFixed(0)} at ${annual}`);
+        // Territories collect their income tax in place of the federal one, so their rates run higher.
+        if (st.type !== 'territory' && sit / annual > 0.135) problems.push(`${st.code} ${date} ${fs}: ${((100 * sit) / annual).toFixed(1)}% at ${annual}`);
+        prev = sit;
+      }
+    }
+    expect(problems).toEqual([]);
+  });
+  it('a check dated outside the tax years on file says so instead of quietly withholding nothing', () => {
+    const r = calculatePay(base({ checkDate: '2031-01-10' }), db);
+    expect(r.warnings.join(' ')).toMatch(/No federal tax tables are on file for 2031/);
+  });
+});

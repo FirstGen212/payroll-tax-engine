@@ -207,4 +207,8 @@ describe('proposal tool', () => {
     expect(r.employees[0].eligibility).toBe('Eligible');
     expect(r.employees[0].monthly!.allotment).toBeGreaterThan(100);
   });
+
+  it('refuses a plan year with no tax tables', () => {
+    expect(() => runProposal([base], { ...std, year: 2031 }, db)).toThrow(/outside the tax data on file/);
+  });
 });

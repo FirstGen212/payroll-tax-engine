@@ -6,6 +6,8 @@ Decimal.set({ precision: 30 });
 
 /** Round a number to `places` decimals with an explicit rounding mode (no binary float surprises). */
 export function round(x: number, places = 2, mode: RoundingMode = 'half_up'): number {
+  // Already at the requested precision (the common case for money): rounding in any mode returns it unchanged.
+  if (places === 2 && Math.abs(x) < 1e12 && Math.round(x * 100) / 100 === x) return x;
   const rm = mode === 'half_up' ? Decimal.ROUND_HALF_UP : mode === 'half_even' ? Decimal.ROUND_HALF_EVEN : Decimal.ROUND_DOWN;
   return new Decimal(x).toDecimalPlaces(places, rm).toNumber();
 }
@@ -15,6 +17,15 @@ export const dollars = (x: number, mode: RoundingMode = 'half_up') => round(x, 0
 
 /** Exact decimal sum of money values. */
 export function sum(values: number[]): number {
+  // Whole-cent values add exactly as integers; anything finer goes through decimal arithmetic.
+  let centsTotal = 0;
+  let whole = true;
+  for (const v of values) {
+    const c = Math.round(v * 100);
+    if (c / 100 !== v || Math.abs(c) > 1e13) { whole = false; break; }
+    centsTotal += c;
+  }
+  if (whole && Math.abs(centsTotal) < 9e15) return centsTotal / 100;
   return values.reduce((acc, v) => acc.plus(v), new Decimal(0)).toNumber();
 }
 

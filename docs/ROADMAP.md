@@ -17,6 +17,8 @@ Covering every US taxing jurisdiction is a multi-phase effort. This is the plan 
 
 ## Phase 2: verification (state by state)
 
+Status after the November 20, 2026 pass: the 2026 income tax formula is `confirmed` or `published` for every state with a wage tax except CT, DC, IA and ND (plus PR and the CNMI). For 2027 only California and Colorado are published; the other states are projected from 2026 until their agencies issue 2027 tables, mostly in December. Unemployment wage bases are confirmed for all states for 2025 and 2026 and for the states that have announced 2027. Still open: CT (recapture and credit tables), DC and IA (only old bulletins found), ND (tables for 2020 and later W-4 forms), NJ 2027 disability and family leave rates, 2027 paid leave rates for DE, DC, HI, ME, OR and RI, the supplemental rates, and 122 local rows.
+
 For each state, compare our formula and every parameter against the agency's current withholding guide and its published examples, then flip the rows to `published`.
 Priority order (by First Gen client footprint, to be confirmed with the client list): NY, NJ, PA, TX, FL, CA, OH, MD, MA, CT, IL, GA, NC, VA, then the rest.
 Known simplifications to replace with exact agency tables: NY (NYS-50-T tables and recapture), NYC, CA (DE 44 2026/2027), CT (TPG-211 phase-outs), NJ (NJ-WT thresholds), HI (Booklet A), WI (sliding standard deduction), OR (federal tax subtraction phase-out), MD (county tiered rates), AL standard deduction phase.

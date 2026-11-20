@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
+import compress from '@fastify/compress';
 import { existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,9 +19,15 @@ import { registerAuth } from './auth.js';
 const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' }, bodyLimit: 40 * 1024 * 1024 });
 // The web app is served from this same address (and through Vite's proxy in development), so other sites get no
 // access unless CORS_ORIGIN names them.
+// A saved proposal is about a megabyte of JSON and the app bundle a third of one: both shrink about tenfold.
+await app.register(compress, { threshold: 2048, encodings: ['br', 'gzip'], brotliOptions: { params: { 1: 4 } } });
 await app.register(cors, { origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',').map((o) => o.trim()) : false });
 app.setErrorHandler((err, req, reply) => {
   const issues = (err as any).issues as { path: (string | number)[]; message: string }[] | undefined;
+  // The database rejecting a malformed id or date is the caller's mistake, not a server fault.
+  const pg = (err as any).code as string | undefined;
+  const badInput = pg === '22P02' ? [404, 'Not found.'] as const : pg === '22007' || pg === '22008' ? [400, 'That date is not valid.'] as const : pg === '23503' ? [409, 'That record is used elsewhere or refers to something that does not exist.'] as const : undefined;
+  if (badInput) return reply.code(badInput[0]).send({ error: badInput[1] });
   const status = issues ? 400 : (err as any).statusCode ?? 500;
   if (status >= 500) req.log.error(err);
   // Input that fails a check is reported as a sentence per field, not as the validator's raw output.
@@ -49,12 +56,14 @@ app.get('/api/jurisdictions', async (req) => {
 });
 
 app.get('/api/rules', async (req) => {
-  const { jurisdiction, date, kind, status } = req.query as Record<string, string | undefined>;
+  const { jurisdiction, date, kind, status, state } = req.query as Record<string, string | undefined>;
+  if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw Object.assign(new Error('Use a date like 2027-01-15.'), { statusCode: 400 });
   return q(`select r.*, coalesce(array_agg(s.source_id) filter (where s.source_id is not null), '{}') as sources
     from tax_rule r left join tax_rule_source s on s.rule_id = r.id
     where ($1::text is null or r.jurisdiction = $1) and ($2::date is null or (r.effective_from <= $2 and (r.effective_to is null or r.effective_to >= $2)))
       and ($3::text is null or r.kind = $3) and ($4::text is null or r.status = $4)
-    group by r.id order by r.jurisdiction, r.kind, r.effective_from limit 5000`, [jurisdiction ?? null, date ?? null, kind ?? null, status ?? null]);
+      and ($5::text is null or r.jurisdiction in (select code from jurisdiction where state = $5))
+    group by r.id order by r.jurisdiction, r.kind, r.effective_from limit 5000`, [jurisdiction ?? null, date ?? null, kind ?? null, status ?? null, state ?? null]);
 });
 
 app.get('/api/rules/:id/history', async (req) => q('select * from tax_rule_history where rule_id=$1 order by changed_at desc', [(req.params as any).id]));
@@ -230,7 +239,14 @@ async function buildInput(clientId: string, employeeId: string, line: { earnings
 await proposalRoutes(app);
 await multiplesRoutes(app);
 
-app.post('/api/calculate', async (req) => calculatePay(req.body as PayInput, await getTaxDb()));
+const CalcBody = z.object({
+  checkDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use a date like 2027-01-15'),
+  payFrequency: z.enum(['daily', 'weekly', 'biweekly', 'semimonthly', 'monthly', 'quarterly', 'semiannual', 'annual']),
+  employer: z.object({ id: z.string(), name: z.string() }).passthrough(),
+  employee: z.object({ id: z.string(), federalW4: z.object({}).passthrough(), residence: z.object({ state: z.string() }).passthrough(), work: z.array(z.object({ state: z.string(), percent: z.number() }).passthrough()).min(1) }).passthrough(),
+  earnings: z.array(z.object({ code: z.string(), amount: z.number() }).passthrough()),
+}).passthrough();
+app.post('/api/calculate', async (req) => calculatePay(CalcBody.parse(req.body) as unknown as PayInput, await getTaxDb()));
 
 const PayRunBody = z.object({
   checkDate: z.string(), runType: z.enum(['actual', 'mock', 'proposal']).default('mock'), vendorProfileId: z.string().nullish(), label: z.string().nullish(), save: z.boolean().default(true),
@@ -293,7 +309,8 @@ app.post('/api/vendor-profiles/:id/learn', async (req) => {
 // ------------------------------------------------------------------ static web app (production build)
 const webDist = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'web', 'dist');
 if (existsSync(webDist)) {
-  await app.register(fastifyStatic, { root: webDist });
+  // Files under /assets carry a content hash in their name, so browsers can keep them for a year; the page itself is always re-checked.
+  await app.register(fastifyStatic, { root: webDist, cacheControl: false, setHeaders: (res, path) => { res.setHeader('cache-control', path.includes('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache'); } });
   app.setNotFoundHandler((req, reply) => (req.url.startsWith('/api') ? reply.code(404).send({ error: 'not found' }) : reply.sendFile('index.html')));
 }
 

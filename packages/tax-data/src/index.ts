@@ -31,14 +31,38 @@ export function loadTaxDatabase(): TaxDatabase {
 }
 
 /** Rules for a jurisdiction and kind effective on a date (latest effectiveFrom wins). */
+/** Rules grouped by jurisdiction, built once per rule list (a pay run asks for the same places thousands of times). */
+const RULE_INDEX = new WeakMap<TaxRule[], { size: number; by: Map<string, TaxRule[]> }>();
+function rulesFor(db: TaxDatabase, jurisdiction: string): TaxRule[] {
+  let idx = RULE_INDEX.get(db.rules);
+  if (!idx || idx.size !== db.rules.length) {
+    const by = new Map<string, TaxRule[]>();
+    for (const r of db.rules) {
+      const list = by.get(r.jurisdiction);
+      if (list) list.push(r);
+      else by.set(r.jurisdiction, [r]);
+    }
+    for (const list of by.values()) list.sort((a, b) => a.effectiveFrom.localeCompare(b.effectiveFrom));
+    idx = { size: db.rules.length, by };
+    RULE_INDEX.set(db.rules, idx);
+  }
+  return idx.by.get(jurisdiction) ?? [];
+}
+
 export function rulesOn(db: TaxDatabase, jurisdiction: string, onDate: string, kind?: TaxKind): TaxRule[] {
-  const live = db.rules.filter(
-    (r) => r.jurisdiction === jurisdiction && (!kind || r.kind === kind) && r.effectiveFrom <= onDate && (!r.effectiveTo || r.effectiveTo >= onDate),
-  );
   // Keep only the most recent rule per (kind, name) so overlapping open-ended rows resolve to the newest.
   const byKey = new Map<string, TaxRule>();
-  for (const r of live.sort((a, b) => a.effectiveFrom.localeCompare(b.effectiveFrom))) byKey.set(`${r.kind}|${r.name}`, r);
+  for (const r of rulesFor(db, jurisdiction)) {
+    if ((kind && r.kind !== kind) || r.effectiveFrom > onDate || (r.effectiveTo && r.effectiveTo < onDate)) continue;
+    byKey.set(`${r.kind}|${r.name}`, r);
+  }
   return [...byKey.values()];
+}
+
+/** First and last tax year with federal withholding tables on file. */
+export function coveredYears(db: TaxDatabase): [number, number] {
+  const years = rulesFor(db, 'US').filter((r) => r.kind === 'FIT').map((r) => Number(r.effectiveFrom.slice(0, 4)));
+  return years.length ? [Math.min(...years), Math.max(...years)] : [0, 0];
 }
 
 export function ruleOn(db: TaxDatabase, jurisdiction: string, kind: TaxKind, onDate: string): TaxRule | undefined {

@@ -53,3 +53,21 @@ The valuation increase on a proposal is employer savings times an EBITDA multipl
 ## Vendor learning
 
 `learnVendorProfile(vendor, samples)` runs each sample paycheck through every combination of conventions in `CONVENTION_SEARCH_SPACE` and keeps the combination with the smallest total difference from the provider's actual tax amounts. It reports per-dimension evidence and the residual lines no convention explains, which point to setup differences (wrong SUI rate, missing local, W-4 data).
+
+## Verification status and the seed
+
+Every rule carries one of six statuses:
+
+- `published`: matches a final agency document that was read directly (IRS, EDD, Colorado DR 1098, NY DFS).
+- `confirmed`: matches a recognized compilation that cites the agency, but the agency document itself was not read. The compilations used so far are the USDA National Finance Center state and local tax bulletins, EY's unemployment wage base tables, and the Mercer and Symetra paid leave summaries. Each confirmed rule names its compilation as a source.
+- `draft`: matches an agency draft (the 2027 Pub 15-T).
+- `projected`: carried forward or estimated because the year has not been published. A program whose rate resets every year (`annual: true` in `states.ts`) is projected for every year after the last one checked (`verifiedThrough`).
+- `unverified`: entered from research and not yet matched to any source.
+- `placeholder`: structure only.
+
+A rule can only be `confirmed` if it names a source outside our own research; a test enforces this, along with unique ids, no overlapping date ranges for the same tax, and a sweep of every state, filing status and wage level for negative, falling or implausible income tax.
+
+The seed (`apps/api/src/seed.ts`) runs on every start. It writes all rules in one statement, leaves alone any rule a person has edited in the app (`updated_by` is not `seed`), and deletes rules it wrote earlier but no longer produces, so a renamed or replaced row cannot apply alongside its successor. Program rule ids are built from the kind and starting year, never from the row's position.
+
+A check dated in a year with no federal tables gets a warning, and a proposal for such a year is refused. `npm run bench` times the engine.
+

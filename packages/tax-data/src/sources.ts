@@ -45,6 +45,9 @@ export const SOURCES: Source[] = [
   { id: 'irs-rp-2026-24', agency: 'IRS', title: 'Rev. Proc. 2026-24: 2027 HSA and high-deductible plan amounts', url: 'https://www.irs.gov/pub/irs-drop/rp-26-24.pdf', retrieved: '2026-11-20' },
   { id: 'dol-futa-2026', agency: 'US DOL', title: 'FUTA credit reduction determination for 2026 (November 10, 2026)', url: 'https://oui.doleta.gov/unemploy/futa_credit.asp', retrieved: '2026-11-20' },
 
+  { id: 'symetra-pfml-2027', agency: 'Symetra (secondary)', title: 'Statutory disability and paid family and medical leave programs (updated October 8, 2026)', url: 'https://benefitsbrokersconsultants.symetra.com/learn/articles-for-employers/statutory-disability-income-and-state-paid-family-and-medical-leave/statutory-disability-income-paid-family-medical-leave-programs/', retrieved: '2026-11-20' },
+  { id: 'hrmorning-co-famli-2027', agency: 'HRMorning (secondary)', title: 'Colorado FAMLI premium rate for 2027', url: 'https://www.hrmorning.com/news/colorado-famli-premium-rate/', retrieved: '2026-11-20' },
+  { id: 'co-dr1098-2027', agency: 'Colorado Department of Revenue', title: 'DR 1098, 2027 Colorado Withholding Worksheet for Employers (November 17, 2026)', url: 'https://tax.colorado.gov/sites/default/files/2026-11/DR_1098_2027.pdf', retrieved: '2026-11-20' },
   // ---- Generic state agency entry points (row-level notes refine these) ----
   { id: 'fta-state-rates', agency: 'Federation of Tax Administrators (secondary)', title: 'State individual income tax rates / agency directory', url: 'https://taxadmin.org/' },
   { id: 'dol-sui-comparison', agency: 'US DOL (secondary)', title: 'Comparison of State Unemployment Insurance Laws', url: 'https://oui.doleta.gov/unemploy/statelaws.asp' },

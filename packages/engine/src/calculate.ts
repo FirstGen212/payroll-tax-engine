@@ -25,6 +25,7 @@ import {
   limitFor,
   loadTaxDatabase,
   ruleOn,
+  coveredYears,
   rulesOn,
 } from '@pte/tax-data';
 import type { CalcSpec, DeductionType, EarningType, FederalWithholdingParams, Jurisdiction, TaxDatabase, TaxRule, VendorConventions, WageBasis } from '@pte/tax-data';
@@ -47,6 +48,17 @@ function ageAtYearEnd(birthDate: string | undefined, year: number): number | und
   return year - Number(birthDate.slice(0, 4));
 }
 
+/** Jurisdictions by code, built once per list instead of on every paycheck. */
+const JUR_INDEX = new WeakMap<Jurisdiction[], { size: number; by: Map<string, Jurisdiction> }>();
+function jurisdictionIndex(db: TaxDatabase): Map<string, Jurisdiction> {
+  let idx = JUR_INDEX.get(db.jurisdictions);
+  if (!idx || idx.size !== db.jurisdictions.length) {
+    idx = { size: db.jurisdictions.length, by: new Map(db.jurisdictions.map((j) => [j.code, j])) };
+    JUR_INDEX.set(db.jurisdictions, idx);
+  }
+  return idx.by;
+}
+
 export function calculatePay(input: PayInput, db: TaxDatabase = loadTaxDatabase()): PayResult {
   const conv: VendorConventions = { ...IRS_BY_THE_BOOK, ...(input.conventions ?? {}) };
   const date = input.checkDate;
@@ -63,7 +75,7 @@ export function calculatePay(input: PayInput, db: TaxDatabase = loadTaxDatabase(
   const taxes: TaxLine[] = [];
   const log = (step: string, detail: string) => audit.push({ step, detail });
   const rnd = (x: number) => cents(x, conv.roundingMode);
-  const jurIndex = new Map<string, Jurisdiction>(db.jurisdictions.map((j) => [j.code, j]));
+  const jurIndex = jurisdictionIndex(db);
   const flagsOf = (code: string) => jurIndex.get(code)?.flags ?? [];
 
   log('setup', `Check ${date}, ${input.payFrequency} (${periods}/yr), run type ${input.runType ?? 'actual'}, conventions ${input.vendorProfileId ?? 'generic'}`);
@@ -270,6 +282,10 @@ export function calculatePay(input: PayInput, db: TaxDatabase = loadTaxDatabase(
 
   // ---------- 3. Federal ----------
   const fitRule = ruleOn(db, 'US', 'FIT', date);
+  if (!fitRule) {
+    const [first, last] = coveredYears(db);
+    warnings.push(`No federal tax tables are on file for ${date.slice(0, 4)}: the data covers ${first} to ${last}. Federal, state and local taxes for this check are missing or incomplete.`);
+  }
   const fedParams = fitRule?.calc.kind === 'federal_withholding' ? (fitRule.calc.params as FederalWithholdingParams) : undefined;
   const allTerritoryReplaced = flagsOf(residence).includes('fit_replaced_by_territory_tax') && [...workStates.keys()].every((s) => flagsOf(s).includes('fit_replaced_by_territory_tax'));
   const fitWages = wagesFor('FIT');

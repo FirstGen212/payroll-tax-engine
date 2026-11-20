@@ -24,10 +24,10 @@ export default function Research() {
   const [status, setStatus] = useState('');
   useEffect(() => { api('/coverage').then(setCov); }, []);
   useEffect(() => {
-    api(`/jurisdictions?state=${state}`).then(async (js) => {
-      const all = await Promise.all(js.map((j: any) => api(`/rules?jurisdiction=${encodeURIComponent(j.code)}&date=${date}${status ? `&status=${status}` : ''}`)));
-      setRules(all.flat());
-    });
+    // One request for the whole state; a slower earlier answer never replaces a newer one.
+    let current = true;
+    api(`/rules?state=${encodeURIComponent(state)}&date=${date}${status ? `&status=${status}` : ''}`).then((rows) => { if (current) setRules(rows); }).catch(() => { if (current) setRules([]); });
+    return () => { current = false; };
   }, [state, date, status]);
   const perState = useMemo(() => {
     const m: Record<string, any> = {};

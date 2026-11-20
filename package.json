@@ -12,7 +12,8 @@
     "db:seed": "npm run seed -w apps/api",
     "dev:api": "npm run dev -w apps/api",
     "dev:web": "npm run dev -w apps/web",
-    "coverage:report": "tsx scripts/coverage-report.ts"
+    "coverage:report": "tsx scripts/coverage-report.ts",
+    "bench": "tsx packages/engine/bench.mts"
   },
   "devDependencies": {
     "typescript": "^5.6.3",

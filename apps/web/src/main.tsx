@@ -1,6 +1,6 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter, NavLink, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Link, NavLink, Route, Routes } from 'react-router-dom';
 import './styles.css';
 import Clients from './pages/Clients';
 import ClientDetail from './pages/ClientDetail';
@@ -16,6 +16,7 @@ import ProposalBuilder from './pages/ProposalBuilder';
 import Admin from './pages/Admin';
 import PublicReport from './pages/Report';
 import { api } from './api';
+import { PageHead } from './components';
 import { AuthProvider, Login, LogoOrName, useAuth } from './auth';
 
 type Theme = 'system' | 'light' | 'dark';
@@ -138,6 +139,7 @@ function Shell() {
             <Route path="/vendors" element={<Vendors />} />
             <Route path="/multiples" element={<Multiples />} />
             <Route path="/admin" element={has(['users.manage', 'audit.view']) ? <Admin /> : <p className="muted">You don't have access to this page.</p>} />
+            <Route path="*" element={<PageHead eyebrow="Not found" title="This page does not exist" actions={<Link className="fg-btn" to="/proposals">Go to the proposal queue</Link>}>The address may be mistyped, or the item was deleted.</PageHead>} />
           </Routes>
         </main>
       </div>

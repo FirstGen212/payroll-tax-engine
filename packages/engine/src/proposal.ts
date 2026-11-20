@@ -7,7 +7,7 @@
  * the new deduction), so wage bases (Social Security, FUTA, SUI) are respected,
  * then applies eligibility rules and pricing tiers.
  */
-import { loadTaxDatabase } from '@pte/tax-data';
+import { coveredYears, loadTaxDatabase } from '@pte/tax-data';
 import type { TaxDatabase, VendorConventions } from '@pte/tax-data';
 import { runSeries } from './payrun.js';
 import { cents, PERIODS_PER_YEAR, WEEKS_PER_PERIOD } from './money.js';
@@ -904,6 +904,9 @@ export function runProposal(rows: CensusRow[], settings: Partial<ProposalSetting
     overrides: settings.overrides ?? {},
     participationRate: settings.participationRate ?? DEFAULT_PROPOSAL_SETTINGS.participationRate,
   };
+  const [firstYear, lastYear] = coveredYears(db);
+  if (!Number.isInteger(s.year) || s.year < firstYear || s.year > lastYear)
+    throw Object.assign(new Error(`Plan year ${s.year} is outside the tax data on file (${firstYear} to ${lastYear}). Pick a year in that range.`), { statusCode: 400 });
   const rate = Math.min(1, Math.max(0, s.participationRate));
   // The same employee can appear more than once (several checks in a register).
   const seen = new Map<string, number>();
