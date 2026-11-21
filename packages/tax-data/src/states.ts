@@ -70,6 +70,36 @@ export interface StateProfile {
 const SF = (formula: StateFormula): CalcSpec => ({ kind: 'state_formula', formula });
 /** A USDA National Finance Center tax bulletin: the federal payroll provider's published summary of a state's withholding formula. */
 const nfc = (code: string, path: string): string => agencySource(`nfc-${code.toLowerCase()}-${path.replace(/\W+/g, '-')}`, 'USDA National Finance Center', `${code} income tax withholding bulletin (${path.slice(0, 4)})`, `https://help.nfc.usda.gov/bulletins/${path}.htm`).id;
+/** Connecticut TPG-211 (2026) tables, read from the DRS document. Ranges are "more than" the lower bound and "up to" the upper. */
+const CT_CREDIT_DECIMALS = [0.75, 0.7, 0.65, 0.6, 0.55, 0.5, 0.45, 0.4, 0.35, 0.3, 0.25, 0.2, 0.15, 0.14, 0.13, 0.12, 0.11, 0.1, 0.09, 0.08, 0.07, 0.06, 0.05, 0.04, 0.03, 0.02, 0.01];
+const ctB = (...rows: [number, number][]) => br(...rows);
+export const CT_TPG211_2026 = {
+  /** Table A: exemption, reduced $1,000 for each $1,000 (or part) of annual salary over the start. Code D has none. */
+  exemption: { A: { base: 12000, start: 24000 }, B: { base: 19000, start: 38000 }, C: { base: 24000, start: 48000 }, D: { base: 0, start: 0 }, F: { base: 15000, start: 30000 } },
+  /** Table B: initial tax on annual taxable income. */
+  brackets: {
+    A: ctB([0, 2], [10000, 4.5], [50000, 5.5], [100000, 6], [200000, 6.5], [250000, 6.9], [500000, 6.99]),
+    B: ctB([0, 2], [16000, 4.5], [80000, 5.5], [160000, 6], [320000, 6.5], [400000, 6.9], [800000, 6.99]),
+    C: ctB([0, 2], [20000, 4.5], [100000, 5.5], [200000, 6], [400000, 6.5], [500000, 6.9], [1000000, 6.99]),
+  },
+  /** Table C: 2% phase-out add-back, in steps over the start, up to the cap. */
+  addBack: { A: { start: 50250, step: 2500, inc: 25, cap: 250 }, D: { start: 50250, step: 2500, inc: 25, cap: 250 }, B: { start: 78500, step: 4000, inc: 40, cap: 400 }, C: { start: 100500, step: 5000, inc: 50, cap: 500 }, F: { start: 56500, step: 5000, inc: 25, cap: 250 } },
+  /** Table D: recapture, in tiers; each tier adds its step amount over its start, up to its cumulative cap. */
+  recapture: {
+    A: [{ start: 105000, step: 5000, inc: 25, cap: 250 }, { start: 200000, step: 5000, inc: 90, cap: 2950 }, { start: 500000, step: 5000, inc: 50, cap: 3400 }],
+    B: [{ start: 168000, step: 8000, inc: 40, cap: 400 }, { start: 320000, step: 8000, inc: 140, cap: 4600 }, { start: 800000, step: 8000, inc: 80, cap: 5320 }],
+    C: [{ start: 210000, step: 10000, inc: 50, cap: 500 }, { start: 400000, step: 10000, inc: 180, cap: 5900 }, { start: 1000000, step: 10000, inc: 100, cap: 6800 }],
+  },
+  /** Table E: personal tax credit. Upper bound of each row, paired with CT_CREDIT_DECIMALS; above the last row the credit is 0. Code D has none. */
+  creditUpTo: {
+    A: [15000, 15500, 16000, 16500, 17000, 17500, 18000, 18500, 20000, 20500, 21000, 21500, 25000, 25500, 26000, 26500, 27000, 48000, 48500, 49000, 49500, 50000, 50500, 51000, 51500, 52000, 52500],
+    B: [24000, 24500, 25000, 25500, 26000, 26500, 27000, 27500, 34000, 34500, 35000, 35500, 44000, 44500, 45000, 45500, 46000, 74000, 74500, 75000, 75500, 76000, 76500, 77000, 77500, 78000, 78500],
+    C: [30000, 30500, 31000, 31500, 32000, 32500, 33000, 33500, 40000, 40500, 41000, 41500, 50000, 50500, 51000, 51500, 52000, 96000, 96500, 97000, 97500, 98000, 98500, 99000, 99500, 100000, 100500],
+    F: [18800, 19300, 19800, 20300, 20800, 21300, 21800, 22300, 25000, 25500, 26000, 26500, 31300, 31800, 32300, 32800, 33300, 60000, 60500, 61000, 61500, 62000, 62500, 63000, 63500, 64000, 64500],
+  },
+  creditDecimals: CT_CREDIT_DECIMALS,
+};
+
 const NONE: CalcSpec = { kind: 'none', reason: 'No state income tax on wages' };
 const U: VerificationStatus = 'unverified';
 const C: VerificationStatus = 'confirmed';
@@ -156,7 +186,7 @@ export const STATES: StateProfile[] = [
   {
     code: 'CT', name: 'Connecticut', fips: '09', type: 'state', flags: ['has_sui', 'has_pfml', 'convenience_of_employer'],
     agency: { name: 'Connecticut DRS', url: 'https://portal.ct.gov/drs', withholdingGuide: 'https://portal.ct.gov/drs/publications/informational-publications' },
-    sit: { 2026: { status: U, calc: SF({ form: 'CT-W4', brackets: { single: br([0, 2], [10000, 4.5], [50000, 5.5], [100000, 6], [200000, 6.5], [250000, 6.9], [500000, 6.99]), mfj: br([0, 2], [20000, 4.5], [100000, 5.5], [200000, 6], [400000, 6.5], [500000, 6.9], [1000000, 6.99]), hoh: br([0, 2], [16000, 4.5], [80000, 5.5], [160000, 6], [320000, 6.5], [400000, 6.9], [800000, 6.99]) }, personalExemption: { single: 15000, mfs: 12000, mfj: 24000, hoh: 19000 } }), notes: 'Simplified: CT TPG-211 withholding codes A-F, exemption phase-outs, 2% phase-out add-back and recapture not yet modeled. Treat as estimate.' } },
+    sit: { 2026: { status: P, sources: [agencySource('ct-tpg211-2026', 'Connecticut Department of Revenue Services', 'TPG-211, 2026 Withholding Calculation Rules (Rev. 12/25), effective January 1, 2026', 'https://portal.ct.gov/-/media/drs/forms/2025/wth/tpg-211_1225.pdf').id], calc: { kind: 'custom', handler: 'CT', params: CT_TPG211_2026 }, notes: 'Full TPG-211 method: Table A exemption phase-out, Table B tax, Table C 2% phase-out add-back, Table D recapture, Table E personal tax credit. The 2026 rules are unchanged from 2025. Code from the CT-W4 when known; otherwise Single F, Married filing separately A, Married filing jointly C (A when both spouses work), Head of household B.' } },
     sui: { wageBase: { 2025: 26100, 2026: 27000 }, confirmedYears: [2025, 2026], newEmployerRate: 1.9, rateRange: [1.1, 8.9] },
     programs: [{ kind: 'PFML_EE', name: 'CT Paid Leave', payer: 'employee', wageBasis: 'FICA', calc: { kind: 'percent', rate: 0.005, wageBase: 'SS' }, from: '2026-01-01', status: C, annual: true, verifiedThrough: 2027, sources: ['mercer-pfml-2026', 'symetra-pfml-2027'], notes: 'Wage cap tracks the SS wage base.' }],
   },

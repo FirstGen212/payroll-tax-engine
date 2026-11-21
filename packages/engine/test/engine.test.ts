@@ -360,3 +360,34 @@ describe('Sanity sweep across every state, status and wage level', () => {
     expect(r.warnings.join(' ')).toMatch(/No federal tax tables are on file for 2031/);
   });
 });
+
+describe('Connecticut TPG-211 withholding', () => {
+  const ct = (wages: number, fed: any, w4: any = {}) => {
+    const calc = loadTaxDatabase().rules.find((r) => r.jurisdiction === 'CT' && r.kind === 'SIT' && r.effectiveFrom.startsWith('2026'))!.calc;
+    return computeStateCalc(calc, { state: 'CT', wages, supplemental: 0, periods: 52, w4, federalW4: fed, useFlatSupplemental: false }).amount * 52;
+  };
+  it('single (code F), low pay: exemption and the 35% personal tax credit', () => {
+    // 22,393.80 - 15,000 = 7,393.80 x 2% = 147.88; credit .35 -> 96.12
+    expect(ct(22393.8 / 52, { version: '2020+', filingStatus: 'single' })).toBeCloseTo(96.12, 1);
+  });
+  it('single over $44,000: exemption fully phased out, 10% credit', () => {
+    // 52,826.28: 200 + 1,800 + 5.5% x 2,826.28 = 2,155.45; credit .10 -> 1,939.90
+    expect(ct(52826.28 / 52, { version: '2020+', filingStatus: 'single' })).toBeCloseTo(1939.9, 1);
+  });
+  it('single $70,000: 2% add-back and no credit', () => {
+    // 200 + 4.5% x 40,000 + 5.5% x 20,000 = 3,100; add-back (70,000 is in 66,500-71,500) $75
+    expect(ct(70000 / 52, { version: '2020+', filingStatus: 'single' })).toBeCloseTo(3175, 1);
+  });
+  it('married filing jointly (code C) $36,226: $24,000 exemption, 35% credit', () => {
+    // 12,226.32 x 2% = 244.53; credit .35 (33,500-40,000) -> 158.94
+    expect(ct(36226.32 / 52, { version: '2020+', filingStatus: 'mfj' })).toBeCloseTo(158.94, 1);
+  });
+  it('single $120,000: recapture $75', () => {
+    // 200 + 1,800 + 2,750 + 6% x 20,000 = 5,950; add-back 250; recapture (115,000-120,000) 75
+    expect(ct(120000 / 52, { version: '2020+', filingStatus: 'single' })).toBeCloseTo(6275, 1);
+  });
+  it('code D: no exemption and no credit', () => {
+    // 2% x 10,000 + 4.5% x 10,000 = 650
+    expect(ct(20000 / 52, { version: '2020+', filingStatus: 'single' }, { ctCode: 'D' })).toBeCloseTo(650, 1);
+  });
+});

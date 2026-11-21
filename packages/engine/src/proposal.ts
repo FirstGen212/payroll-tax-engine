@@ -419,6 +419,8 @@ export function parseFederalStatus(s?: string): FederalW4['filingStatus'] | unde
   if (!s) return undefined;
   const t = s.toLowerCase();
   if (/head/.test(t) || t === 'hoh' || t === 'h') return 'hoh';
+  // The 2020+ W-4 box "Single or Married filing separately" is one choice; read it as Single (the common case, and state forms such as CT-W4 treat the two differently).
+  if (/single or married filing separately/.test(t)) return 'single';
   if (/higher single|single rate|withhold at single/.test(t)) return 'mfs';
   if (/separate/.test(t) || t === 'mfs') return 'mfs';
   if (/married|joint|mfj|qualifying|widow/.test(t) || t === 'm') return 'mfj';

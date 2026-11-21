@@ -188,6 +188,38 @@ export const CUSTOM_HANDLERS: Record<string, Handler> = {
     return { amount: tax / ctx.periods, lines: [`NJ table ${table}: tax on ${taxable.toFixed(2)} = ${tax.toFixed(2)}`] };
   },
 
+  /** Connecticut TPG-211: exemption (Table A), tax (B), 2% add-back (C), recapture (D), less the personal tax credit (E). */
+  CT(p, ctx) {
+    const st = statusFor(ctx.w4, ctx.federalW4);
+    const code = ctx.w4.ctCode ?? (st === 'hoh' ? 'B' : st === 'mfs' || st === 'mfj_two_income' ? 'A' : st === 'mfj' || st === 'mfj_one_income' || st === 'qss' ? 'C' : 'F');
+    const annual = ctx.wages * ctx.periods;
+    const steps = (over: number, step: number) => (over > 0 ? Math.ceil(over / step - 1e-9) : 0);
+    const ex = p.exemption[code];
+    const exemption = Math.max(0, ex.base - 1000 * steps(annual - ex.start, 1000));
+    const taxable = Math.max(0, annual - exemption);
+    const lines = [`CT code ${code}: annual ${annual.toFixed(2)} - exemption ${exemption} = ${taxable.toFixed(2)}`];
+    if (taxable <= 0) return { amount: 0, lines };
+    const initial = bracketTax(taxable, p.brackets[code === 'B' || code === 'C' ? code : 'A']);
+    const ab = p.addBack[code];
+    const addBack = Math.min(ab.cap, ab.inc * steps(annual - ab.start, ab.step));
+    // Recapture tiers are cumulative: each tier starts from the previous tier's cap.
+    let recapture = 0;
+    let prevCap = 0;
+    for (const t of p.recapture[code === 'B' || code === 'C' ? code : 'A']) {
+      if (annual > t.start) recapture = Math.min(t.cap, prevCap + t.inc * steps(annual - t.start, t.step));
+      prevCap = t.cap;
+    }
+    let credit = 0;
+    if (code !== 'D') {
+      const ups: number[] = p.creditUpTo[code];
+      const i = ups.findIndex((u) => annual <= u);
+      credit = i === -1 ? 0 : p.creditDecimals[i];
+    }
+    const tax = (initial + addBack + recapture) * (1 - credit);
+    lines.push(`CT tax ${initial.toFixed(2)} + add-back ${addBack} + recapture ${recapture} = ${(initial + addBack + recapture).toFixed(2)}, less ${Math.round(credit * 100)}% credit = ${tax.toFixed(2)}`);
+    return { amount: tax / ctx.periods, lines };
+  },
+
   /** Utah Pub 14: flat rate less a phased-out allowance credit. */
   UT(p, ctx) {
     const st = statusKey(statusFor(ctx.w4, ctx.federalW4));

@@ -107,7 +107,7 @@ describe('proposal tool', () => {
   });
 
   it('parses statuses, frequencies and schedules', () => {
-    expect(parseFederalStatus('Single or Married filing separately')).toBe('mfs');
+    expect(parseFederalStatus('Single or Married filing separately')).toBe('single');
     expect(parseFederalStatus('Married filing jointly or Qualifying widow(er)')).toBe('mfj');
     expect(parseFederalStatus('Head of Household')).toBe('hoh');
     expect(parseFrequency('Bi-Weekly')).toBe('biweekly');
