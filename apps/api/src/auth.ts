@@ -28,6 +28,7 @@ export const PERMISSIONS: { key: string; label: string; group: string }[] = [
   { key: 'proposals.view_all', label: "See and work on everyone's proposals", group: 'Proposals' },
   { key: 'proposals.share', label: 'Publish and revoke client proposal links', group: 'Proposals' },
   { key: 'proposals.delete', label: 'Delete proposals', group: 'Proposals' },
+  { key: 'margins.view', label: 'See and change benefit package costs and margins', group: 'Proposals' },
   { key: 'users.manage', label: 'Add users, set roles and permissions, reset passwords', group: 'Admin' },
   { key: 'users.impersonate', label: 'View the app as another user', group: 'Admin' },
   { key: 'audit.view', label: 'See the audit log', group: 'Admin' },

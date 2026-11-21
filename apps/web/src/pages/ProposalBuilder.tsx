@@ -70,6 +70,7 @@ export default function ProposalBuilder() {
   // Only the newest calculation's answer is shown: clicking through prices quickly must not let an older one land last.
   const calcSeq = useRef(0);
   const can = useCan();
+  const showMargins = can('margins.view');
   const editable = can('proposals.edit');
 
   useEffect(() => {
@@ -107,7 +108,7 @@ export default function ProposalBuilder() {
     } catch (e: any) { setErr(e.message); } finally { setBusy(''); }
   };
 
-  const body = (s = settings) => ({ headers, rows, mapping, settings: s, name: meta.name || 'Proposal', clientId: meta.clientId || null, company: meta.company ?? null, fileName: file?.fileName ?? null, sheetName, status: meta.status, notes: meta.notes || null, reportSettings });
+  const body = (s = settings) => ({ id: id ?? null, headers, rows, mapping, settings: s, name: meta.name || 'Proposal', clientId: meta.clientId || null, company: meta.company ?? null, fileName: file?.fileName ?? null, sheetName, status: meta.status, notes: meta.notes || null, reportSettings });
   const calculate = async (s = settings, note?: string) => {
     const n = ++calcSeq.current;
     setErr(''); setBusy(note ?? `Calculating ${rows.length} rows: a full year of checks for each, with and without the deduction…`);
@@ -255,9 +256,11 @@ export default function ProposalBuilder() {
         {editReq && (
           <div style={{ marginTop: 12 }}>
             <label>Benefit package (preventative care tier applied to benefit cost)</label>
-            <div className="seg" style={{ marginTop: 6 }}>{settings.benefitPackages.map((p: any) => <button key={p.id} className={settings.benefitPackageId === p.id ? 'on' : ''} onClick={() => setS({ benefitPackageId: p.id })}>{p.name} ({money(p.monthlyCost)})</button>)}</div>
-            <p className="small muted" style={{ margin: '8px 0 4px' }}>Every package includes virtual care. Package cost per enrollee per month, taken off the price for the margin:</p>
+            <div className="seg" style={{ marginTop: 6 }}>{settings.benefitPackages.map((p: any) => <button key={p.id} className={settings.benefitPackageId === p.id ? 'on' : ''} onClick={() => setS({ benefitPackageId: p.id })}>{p.name}{showMargins ? ` (${money(p.monthlyCost)})` : ''}</button>)}</div>
+            {showMargins && <>
+            <p className="small muted" style={{ margin: '8px 0 4px' }}>Every package includes virtual care. Package cost per enrollee per month, taken off the price for the margin (only admins see this):</p>
             <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>{settings.benefitPackages.map((p: any, i: number) => <label key={p.id} className="small">{p.name}<input type="number" min={0} step="0.01" style={{ width: 96 }} value={p.monthlyCost} onChange={(e) => setS({ benefitPackages: settings.benefitPackages.map((q: any, j: number) => (j === i ? { ...q, monthlyCost: Math.max(0, num(e.target.value)) } : q)) })} /></label>)}</div>
+            </>}
             <div className="grid2" style={{ marginTop: 12 }}>
               <label>Monthly allotment threshold: minimum monthly allotment required ($)<input type="number" value={settings.allotmentThreshold} onChange={(e) => setS({ allotmentThreshold: num(e.target.value) })} /></label>
               <label>Low income threshold: annual gross at or below this is low income ($)<input type="number" value={settings.lowIncomeMax} onChange={(e) => setS({ lowIncomeMax: num(e.target.value) })} /></label>
@@ -292,7 +295,7 @@ export default function ProposalBuilder() {
                       {FREQS.map(([f, label]) => <td key={f} className="num"><input style={{ width: 100 }} type="number" step="0.01" aria-label={`${t.name} deduction, ${label}`} value={t.deductionByFrequency?.[f] ?? ''} onChange={(e) => setTierDed(i, f, num(e.target.value))} /></td>)}
                       <td className="num"><input style={{ width: 76 }} type="number" step="1" aria-label={`${t.name} price`} value={t.monthlyPrice} onChange={(e) => setTier(i, { monthlyPrice: num(e.target.value) })} /></td>
                       <td className="num"><input style={{ width: 76 }} type="number" step="1" aria-label={`${t.name} cutoff`} value={t.allotmentCutoff} onChange={(e) => setTier(i, { allotmentCutoff: num(e.target.value) })} /></td>
-                      <td><select style={{ width: 150 }} aria-label={`${t.name} package`} value={t.benefitPackageId} onChange={(e) => setTier(i, { benefitPackageId: e.target.value })}>{settings.benefitPackages.map((p: any) => <option key={p.id} value={p.id}>{p.name} ${Math.round(p.monthlyCost)}</option>)}</select></td>
+                      <td><select style={{ width: 150 }} aria-label={`${t.name} package`} value={t.benefitPackageId} onChange={(e) => setTier(i, { benefitPackageId: e.target.value })}>{settings.benefitPackages.map((p: any) => <option key={p.id} value={p.id}>{p.name}{showMargins ? ` $${Math.round(p.monthlyCost)}` : ''}</option>)}</select></td>
                       <td><input type="checkbox" aria-label={`${t.name} uses the full-time rules`} checked={t.fullTimeRules} onChange={(e) => setTier(i, { fullTimeRules: e.target.checked })} /></td>
                     </tr>
                   ))}</tbody>
@@ -326,7 +329,7 @@ export default function ProposalBuilder() {
               <label>Trigger: hours/week at or below<input style={{ width: 90 }} type="number" value={settings.partTime.maxHoursPerWeek} onChange={(e) => setPT({ maxHoursPerWeek: num(e.target.value) })} /></label>
               <label>or annual gross below<input style={{ width: 110 }} type="number" value={settings.partTime.maxAnnualGross} onChange={(e) => setPT({ maxAnnualGross: num(e.target.value) })} /></label>
               <label>PT price a month<input style={{ width: 100 }} type="number" value={settings.partTime.monthlyPrice ?? 74} onChange={(e) => setPT({ monthlyPrice: num(e.target.value) })} /></label>
-              <label>PT benefit package<select value={settings.partTime.benefitPackageId ?? 'mec'} onChange={(e) => setPT({ benefitPackageId: e.target.value })}>{settings.benefitPackages.map((p: any) => <option key={p.id} value={p.id}>{p.name} ({money(p.monthlyCost)})</option>)}</select></label>
+              <label>PT benefit package<select value={settings.partTime.benefitPackageId ?? 'mec'} onChange={(e) => setPT({ benefitPackageId: e.target.value })}>{settings.benefitPackages.map((p: any) => <option key={p.id} value={p.id}>{p.name}{showMargins ? ` (${money(p.monthlyCost)})` : ''}</option>)}</select></label>
             </div>
             <h3>Calculation</h3>
             <div className="row">
@@ -394,6 +397,7 @@ export default function ProposalBuilder() {
 }
 
 function Results({ result, settings, setS, view, setView, meta, busy, onSave, onDownload, onPickProgram, onRetryPrice, calcError, onPrices, defaultPrices, onOverride, editable, saveLabel }: any) {
+  const showMargins = useCan()('margins.view');
   const s = result.summary;
   // A price was picked and the numbers below are still for the old one: they are dimmed and labelled until the
   // recalculation lands, so nothing on the page shows one price's table next to another price's totals.
@@ -478,8 +482,8 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
       {view === 'results' && (
         <>
           {result.settings.pricingMode === 'tiers'
-            ? <TierMargins result={result} settings={settings} />
-            : <MarginAnalyzer result={result} settings={settings} onPick={onPickProgram} onPrices={onPrices} defaultPrices={defaultPrices} editable={editable} busy={busy} />}
+            ? <TierMargins result={result} settings={settings} showMargins={showMargins} />
+            : <MarginAnalyzer result={result} settings={settings} showMargins={showMargins} onPick={onPickProgram} onPrices={onPrices} defaultPrices={defaultPrices} editable={editable} busy={busy} />}
 
           {repricing && (busy
             ? <div className="fg-callout" role="status" style={{ marginBottom: 12 }}><span>Updating every number below to the <b>{money(settings.allotmentThreshold)}</b> price: eligible employees, allotments, employer savings, benefits and each employee's status.</span></div>
@@ -644,7 +648,7 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
  * selected price's numbers and the best-margin mark are worked out in the browser from the employees already
  * calculated, so they change the moment a price is picked or typed; each employee's status then updates in the background.
  */
-function MarginAnalyzer({ result, settings, onPick, onPrices, defaultPrices, editable, busy }: any) {
+function MarginAnalyzer({ result, settings, onPick, onPrices, defaultPrices, editable, busy, showMargins }: any) {
   const [draft, setDraft] = useState<string[] | null>(null);
   const pkg = settings.benefitPackages?.find((p: any) => p.id === settings.benefitPackageId) ?? result.summary.benefitPackage;
   const cost: number = pkg?.monthlyCost ?? 0;
@@ -668,15 +672,15 @@ function MarginAnalyzer({ result, settings, onPick, onPrices, defaultPrices, edi
   return (
     <div className="panel">
       <div className="row" style={{ justifyContent: 'space-between', alignItems: 'baseline' }}>
-        <h3 style={{ margin: 0 }}>Margin strategy analyzer</h3>
+        <h3 style={{ margin: 0 }}>{showMargins ? 'Margin strategy analyzer' : 'Program prices'}</h3>
         {editable && !draft && <button className="small" onClick={() => setDraft(saved.map(String))}>Edit prices</button>}
       </div>
       <p style={{ margin: '8px 0' }}>
-        At <b>{money(sel.price)}</b> a month, <b>{sel.eligible}</b> {sel.eligible === 1 ? 'employee qualifies' : 'employees qualify'} on the full plan{sel.partTimeEligible ? <> and <b>{sel.partTimeEligible}</b> on the part-time plan at {money(pt.price)}</> : null}:{' '}
-        <b>{money(sel.monthlyRevenue)}</b> revenue and <b>{money(sel.monthlyMargin)}</b> margin a month ({pctf(sel.marginPercent)}), <b>{money(sel.annualMargin)}</b> over 12 months.
+        At <b>{money(sel.price)}</b> a month, <b>{sel.eligible}</b> {sel.eligible === 1 ? 'employee qualifies' : 'employees qualify'} on the full plan{sel.partTimeEligible ? <> and <b>{sel.partTimeEligible}</b> on the part-time plan at {money(pt.price)}</> : null}{showMargins ? <>:{' '}
+        <b>{money(sel.monthlyRevenue)}</b> revenue and <b>{money(sel.monthlyMargin)}</b> margin a month ({pctf(sel.marginPercent)}), <b>{money(sel.annualMargin)}</b> over 12 months.</> : '.'}
         {updating && <span className="muted small"> {busy ? 'Updating each employee at this price…' : 'Calculate again to update each employee at this price.'}</span>}
       </p>
-      <div className="fg-note">{editable ? 'Click a price to use it for this proposal. ' : ''}Margin = price − {pkg?.name} benefit cost ({money(cost)}) per eligible employee per month, plus the part-time plan's {money(pt.price)} − {ptPkg?.name} {money(pt.benefitMonthlyCost)} for each part-time enrollee. Counts are employees who pass every other rule and whose savings reach the price.</div>
+      <div className="fg-note">{editable ? 'Click a price to use it for this proposal. ' : ''}{showMargins ? <>Margin = price − {pkg?.name} benefit cost ({money(cost)}) per eligible employee per month, plus the part-time plan's {money(pt.price)} − {ptPkg?.name} {money(pt.benefitMonthlyCost)} for each part-time enrollee. </> : null}Counts are employees who pass every other rule and whose savings reach the price.</div>
       {draft && (
         <div className="row" style={{ alignItems: 'flex-end', marginTop: 10 }}>
           {draft.map((v, i) => (
@@ -695,7 +699,7 @@ function MarginAnalyzer({ result, settings, onPick, onPrices, defaultPrices, edi
       )}
       {draft && draft.some((v) => !cleanPrices([v]).length) && <div className="err" style={{ marginTop: 8 }}>Prices run from $1 to $5,000 a month. Blank or out-of-range prices are left out.</div>}
       <div className="fg-tablebox" style={{ marginTop: 10 }}><table>
-        <thead><tr><th>Program</th><th className="num">Eligible</th><th className="num">Part-time</th><th className="num">Monthly revenue</th><th className="num">Benefit cost</th><th className="num">Margin %</th><th className="num">12-month margin</th></tr></thead>
+        <thead><tr><th>Program</th><th className="num">Eligible</th><th className="num">Part-time</th>{showMargins && <><th className="num">Monthly revenue</th><th className="num">Benefit cost</th><th className="num">Margin %</th><th className="num">12-month margin</th></>}</tr></thead>
         <tbody>{rows.map((p) => {
           const on = p.price === chosen;
           const clickable = editable && !draft && !on;
@@ -703,8 +707,8 @@ function MarginAnalyzer({ result, settings, onPick, onPrices, defaultPrices, edi
             <tr key={p.price} className={on ? 'fg-sel' : undefined} style={{ cursor: clickable ? 'pointer' : undefined }} onClick={() => pick(p.price)}
               tabIndex={clickable ? 0 : undefined} role={editable ? 'button' : undefined} aria-pressed={editable ? on : undefined}
               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(p.price); } }}>
-              <td><b>{money(p.price)}</b> {on && <span className="badge b-primary">{updating ? 'Selected' : 'Current'}</span>} {best?.price === p.price && <span className="badge b-green">Best margin</span>}</td>
-              <td className="num">{p.eligible}</td><td className="num">{p.partTimeEligible}</td><td className="num">{money(p.monthlyRevenue)}</td><td className="num">{money(p.monthlyBenefitCost)}</td><td className="num">{pctf(p.marginPercent)}</td><td className="num">{money(p.annualMargin)}</td>
+              <td><b>{money(p.price)}</b> {on && <span className="badge b-primary">{updating ? 'Selected' : 'Current'}</span>} {showMargins && best?.price === p.price && <span className="badge b-green">Best margin</span>}</td>
+              <td className="num">{p.eligible}</td><td className="num">{p.partTimeEligible}</td>{showMargins && <><td className="num">{money(p.monthlyRevenue)}</td><td className="num">{money(p.monthlyBenefitCost)}</td><td className="num">{pctf(p.marginPercent)}</td><td className="num">{money(p.annualMargin)}</td></>}
             </tr>
           );
         })}</tbody>
@@ -717,7 +721,7 @@ function MarginAnalyzer({ result, settings, onPick, onPrices, defaultPrices, edi
  * Margins for tier pricing: one row per tier with the people placed in it, then the total. Prices typed in the tier
  * editor show here at once; a tier priced under its benefit package's cost is marked as losing money.
  */
-function TierMargins({ result, settings }: any) {
+function TierMargins({ result, settings, showMargins }: any) {
   const tiers = settings.tiers?.length ? settings.tiers : result.settings.tiers ?? [];
   const packages = settings.benefitPackages ?? result.settings.benefitPackages ?? [];
   const rows = useMemo(() => analyzeTiers(result.employees, tiers, packages), [result.employees, JSON.stringify(tiers), JSON.stringify(packages)]);
@@ -727,24 +731,24 @@ function TierMargins({ result, settings }: any) {
   const changed = JSON.stringify(tiers.map((t: any) => [t.enabled, t.allotmentCutoff, t.deductionByFrequency, t.fullTimeRules])) !== JSON.stringify((result.settings.tiers ?? []).map((t: any) => [t.enabled, t.allotmentCutoff, t.deductionByFrequency, t.fullTimeRules]));
   return (
     <div className="panel">
-      <h3 style={{ margin: 0 }}>Tier margins</h3>
+      <h3 style={{ margin: 0 }}>{showMargins ? 'Tier margins' : 'Tiers'}</h3>
       <p style={{ margin: '8px 0' }}>
-        <b>{total.enrolled}</b> {total.enrolled === 1 ? 'employee is' : 'employees are'} placed in a tier: <b>{money(total.monthlyRevenue)}</b> revenue and <b>{money(total.monthlyMargin)}</b> margin a month ({pctf(total.marginPercent)}), <b>{money(total.annualMargin)}</b> over 12 months.
+        <b>{total.enrolled}</b> {total.enrolled === 1 ? 'employee is' : 'employees are'} placed in a tier{showMargins ? <>: <b>{money(total.monthlyRevenue)}</b> revenue and <b>{money(total.monthlyMargin)}</b> margin a month ({pctf(total.marginPercent)}), <b>{money(total.annualMargin)}</b> over 12 months.</> : '.'}
         {changed && <span className="muted small"> Calculate again to place employees with the new deductions or cutoffs.</span>}
       </p>
-      {losers.length > 0 && <div className="fg-fail" role="note" style={{ margin: '8px 0' }}><span><b>Loses money:</b> {losers.map((r) => `${r.name} is priced at ${money(r.price)}, under its ${r.packageName} package cost of ${money(r.benefitCost)} (${money(r.marginPerEmployee)} per enrollee a month)`).join('; ')}.</span></div>}
-      <div className="fg-note">Margin = tier price − its benefit package cost, per enrollee per month. Price per check is for the most common pay schedule ({periods} checks a year).</div>
+      {showMargins && losers.length > 0 && <div className="fg-fail" role="note" style={{ margin: '8px 0' }}><span><b>Loses money:</b> {losers.map((r) => `${r.name} is priced at ${money(r.price)}, under its ${r.packageName} package cost of ${money(r.benefitCost)} (${money(r.marginPerEmployee)} per enrollee a month)`).join('; ')}.</span></div>}
+      <div className="fg-note">{showMargins ? 'Margin = tier price − its benefit package cost, per enrollee per month. ' : ''}Price per check is for the most common pay schedule ({periods} checks a year).</div>
       <div className="fg-tablebox" style={{ marginTop: 10 }}><table>
-        <thead><tr><th>Tier</th><th className="num">Enrolled</th><th className="num">Price a month</th><th className="num">Per check</th><th>Package</th><th className="num">Margin each</th><th className="num">Monthly revenue</th><th className="num">Benefit cost</th><th className="num">Margin %</th><th className="num">12-month margin</th></tr></thead>
+        <thead><tr><th>Tier</th><th className="num">Enrolled</th><th className="num">Price a month</th><th className="num">Per check</th><th>Package</th>{showMargins && <><th className="num">Margin each</th><th className="num">Monthly revenue</th><th className="num">Benefit cost</th><th className="num">Margin %</th><th className="num">12-month margin</th></>}</tr></thead>
         <tbody>{rows.map((r) => (
           <tr key={r.id} style={r.id === 'total' ? { fontWeight: 600 } : undefined}>
-            <td>{r.name} {r.id !== 'total' && r.losesMoney && <span className="badge b-bad">Loses money</span>}</td>
+            <td>{r.name} {showMargins && r.id !== 'total' && r.losesMoney && <span className="badge b-bad">Loses money</span>}</td>
             <td className="num">{r.enrolled}</td>
             <td className="num">{r.id === 'total' ? (r.enrolled ? `${money(r.price)} avg` : '–') : money(r.price)}</td>
             <td className="num">{r.id === 'total' ? '' : money(pricePerCheck(r.price, periods))}</td>
-            <td>{r.id === 'total' ? '' : `${r.packageName} (${money(r.benefitCost)})`}</td>
-            <td className="num">{r.id === 'total' && !r.enrolled ? '–' : money(r.marginPerEmployee)}</td>
-            <td className="num">{money(r.monthlyRevenue)}</td><td className="num">{money(r.monthlyBenefitCost)}</td><td className="num">{pctf(r.marginPercent)}</td><td className="num">{money(r.annualMargin)}</td>
+            <td>{r.id === 'total' ? '' : showMargins ? `${r.packageName} (${money(r.benefitCost)})` : r.packageName}</td>
+            {showMargins && <><td className="num">{r.id === 'total' && !r.enrolled ? '–' : money(r.marginPerEmployee)}</td>
+            <td className="num">{money(r.monthlyRevenue)}</td><td className="num">{money(r.monthlyBenefitCost)}</td><td className="num">{pctf(r.marginPercent)}</td><td className="num">{money(r.annualMargin)}</td></>}
           </tr>
         ))}</tbody>
       </table></div>
