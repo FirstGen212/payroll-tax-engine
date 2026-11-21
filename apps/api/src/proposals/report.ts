@@ -10,7 +10,7 @@ export interface ReportSettings {
   /** What the employee section shows: nothing, counts by status, the eligible employees, or everyone with their status and the reason. */
   showEmployees: 'none' | 'counts' | 'list' | 'all';
   /** Columns of the employee list. */
-  employeeColumns: ('state' | 'plan' | 'deduction' | 'employeeSavings' | 'employerSavings' | 'voluntary')[];
+  employeeColumns: ('state' | 'plan' | 'inPerson' | 'deduction' | 'employeeSavings' | 'employerSavings' | 'voluntary')[];
   showValuation: boolean;
   showCompanies: boolean;
   /** Show the uploaded file's name next to "Last updated". */
@@ -30,7 +30,7 @@ export const DEFAULT_REPORT_SETTINGS: ReportSettings = {
   subtitle: 'First Gen Health Summary',
   intro: '',
   showEmployees: 'all',
-  employeeColumns: ['plan', 'deduction', 'employeeSavings', 'voluntary', 'employerSavings'],
+  employeeColumns: ['plan', 'inPerson', 'deduction', 'employeeSavings', 'voluntary', 'employerSavings'],
   showValuation: true,
   showCompanies: true,
   showSource: true,
@@ -55,7 +55,7 @@ export const ReportSettingsIn = z.object({
   subtitle: z.string().max(160),
   intro: z.string().max(2000),
   showEmployees: z.enum(['none', 'counts', 'list', 'all']),
-  employeeColumns: z.array(z.enum(['state', 'plan', 'deduction', 'employeeSavings', 'employerSavings', 'voluntary'])).max(6),
+  employeeColumns: z.array(z.enum(['state', 'plan', 'inPerson', 'deduction', 'employeeSavings', 'employerSavings', 'voluntary'])).max(7),
   showValuation: z.boolean(),
   showCompanies: z.boolean(),
   showSource: z.boolean(),
@@ -180,7 +180,7 @@ export function buildSnapshot(p: { name: string; company?: string | null; file_n
             deductionPerCheck: pt ? e.partTime!.deductionPerCheck : e.perPeriod?.firstGen,
             employeeMonthlySavings: pt ? e.partTime!.allotment : m.allotment,
             employerAnnualSavings: Math.round(m.employerTaxSavings * 12 * 100) / 100,
-            ...(e.voluntary ? { addOnCost: e.voluntary.addOnCost, voluntarySurplus: e.voluntary.surplus } : {}),
+            ...(e.voluntary ? { addOnCost: e.voluntary.addOnCost, voluntarySurplus: e.voluntary.surplus, inPersonPreventative: e.voluntary.addOns.some((a) => a.id === 'mec') } : {}),
           } : {}),
         };
       })

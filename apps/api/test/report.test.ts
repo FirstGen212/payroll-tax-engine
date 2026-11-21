@@ -121,3 +121,16 @@ describe('client page: tier pricing', () => {
     expect(buildSnapshot(proposal()).plans).toEqual([]);
   });
 });
+
+describe('client page: In-Person Preventative', () => {
+  it('shows whether each enrolled employee has In-Person Preventative on top of virtual care', () => {
+    const mec = { id: 'mec', name: 'In-Person Preventative', monthlyCost: 55 };
+    const withMec = { ...summary, voluntary: { addOns: [{ ...mec, onlyIfAffordable: true, enrolled: 1 }], addOnMonthlyCost: 55, surplusMonthly: 0, shortfalls: 0 } };
+    const res = results.map((e) => (e.name === 'Zed Young' ? { ...e, voluntary: { price: 149, addOns: [mec], addOnCost: 55, surplus: 0 } } : e.name === 'Amy Adams' ? { ...e, voluntary: { price: 74, addOns: [], addOnCost: 0, surplus: -34, without: ['In-Person Preventative'] } } : e));
+    const s = buildSnapshot({ ...proposal(), summary: withMec, results: res });
+    expect(s.employeeColumns).toContain('inPerson');
+    expect(s.employees.find((e: any) => e.name === 'Zed Young')).toMatchObject({ inPersonPreventative: true });
+    expect(s.employees.find((e: any) => e.name === 'Amy Adams')).toMatchObject({ inPersonPreventative: false });
+    expect(s.addOns[0]).toMatchObject({ name: 'In-Person Preventative', enrolled: 1 });
+  });
+});

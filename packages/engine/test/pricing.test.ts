@@ -33,13 +33,13 @@ describe('margin analyzer', () => {
     expect(t.some((p) => p.eligible > 0)).toBe(true);
     const ptCount = result.summary.eligiblePartTime;
     expect(ptCount).toBeGreaterThan(0);
-    // Defaults: part-time plan at $74 a month on the MEC package ($55).
-    expect(pt).toEqual({ price: 74, benefitMonthlyCost: 55 });
+    // Defaults: part-time plan at $74 a month on virtual care.
+    expect(pt).toEqual({ price: 74, benefitMonthlyCost: VIRTUAL_CARE_MONTHLY_COST });
     for (const p of t) {
       expect(p.partTimeEligible).toBe(ptCount);
       expect(p.partTimeRevenue).toBeCloseTo(ptCount * 74, 2);
       expect(p.monthlyRevenue).toBeCloseTo(p.eligible * p.price + ptCount * 74, 2);
-      expect(p.monthlyMargin).toBeCloseTo(p.eligible * (p.price - cost) + ptCount * (74 - 55), 2);
+      expect(p.monthlyMargin).toBeCloseTo(p.eligible * (p.price - cost) + ptCount * (74 - VIRTUAL_CARE_MONTHLY_COST), 2);
       expect(p.annualMargin).toBeCloseTo(p.monthlyMargin * 12, 2);
     }
   });
@@ -95,14 +95,15 @@ describe('tier margins', () => {
     expect(tiersInBrowser(result.employees, repriced, s.benefitPackages)).toEqual(analyzeTiers(result.employees, repriced, s.benefitPackages));
   });
 
-  it('margin is price less the package cost (the $55 MEC by default), Essential is marked as losing money, and the total adds up', () => {
+  it('margin is price less the package cost (virtual care by default), and the total adds up', () => {
     const t = result.summary.tiers!;
     const by = Object.fromEntries(t.map((r) => [r.id, r]));
-    expect(by.plus.marginPerEmployee).toBe(159 - 55);
-    expect(by.standard.marginPerEmployee).toBe(117 - 55);
-    expect(by.basic.marginPerEmployee).toBe(74 - 55);
-    // Essential carries virtual care only, so it no longer pays for MEC it cannot afford.
-    expect(by.essential.packageName).toBe('Virtual care only');
+    const v = VIRTUAL_CARE_MONTHLY_COST;
+    expect(by.plus.marginPerEmployee).toBe(159 - v);
+    expect(by.standard.marginPerEmployee).toBe(117 - v);
+    expect(by.basic.marginPerEmployee).toBe(74 - v);
+    // Every tier is virtual care; In-Person Preventative goes on top as an add-on.
+    expect(t.filter((r) => r.id !== 'total').every((r) => r.packageName === 'Virtual care')).toBe(true);
     expect(by.essential.marginPerEmployee).toBe(31 - VIRTUAL_CARE_MONTHLY_COST);
     expect(t.filter((r) => r.losesMoney).map((r) => r.id)).toEqual(31 < VIRTUAL_CARE_MONTHLY_COST ? ['essential'] : []);
     const tiersOnly = t.filter((r) => r.id !== 'total');
@@ -120,7 +121,7 @@ describe('tier margins', () => {
 });
 
 describe('benefit packages', () => {
-  it('offers virtual care only next to MEC, and a saved proposal keeps its own costs while picking up new packages', () => {
+  it('offers virtual care next to the other packages, and a saved proposal keeps its own costs while picking up new packages', () => {
     const d = mergePackages();
     expect(d.map((p) => p.id)).toEqual(['virtual', 'mec', 'standard', 'mec_plus']);
     const saved = mergePackages([{ id: 'mec', name: 'MEC', monthlyCost: 60 }, { id: 'custom', name: 'Custom', monthlyCost: 10 }]);
@@ -130,8 +131,8 @@ describe('benefit packages', () => {
 
   it('the full plan can be set to virtual care only, and its cost comes off the margin', () => {
     const r = runProposal(rows, { year: 2027, benefitPackageId: 'virtual', benefitPackages: mergePackages().map((p) => (p.id === 'virtual' ? { ...p, monthlyCost: 12 } : p)) }, db);
-    expect(r.summary.benefitPackage.name).toBe('Virtual care only');
+    expect(r.summary.benefitPackage.name).toBe('Virtual care');
     const row = r.summary.programs[0];
-    expect(row.monthlyMargin).toBeCloseTo(row.eligible * (row.price - 12) + row.partTimeEligible * (74 - 55), 2);
+    expect(row.monthlyMargin).toBeCloseTo(row.eligible * (row.price - 12) + row.partTimeEligible * (74 - 12), 2);
   });
 });

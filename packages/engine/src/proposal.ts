@@ -123,6 +123,8 @@ export interface VoluntaryBenefit {
   monthlyCost: number;
   /** Added to every enrolled employee in this proposal. */
   selected: boolean;
+  /** Added only for employees whose savings cover it after the plan price (MEC); the rest keep the plan alone. */
+  onlyIfAffordable?: boolean;
 }
 
 /** The admin fee the employer pays First Gen, taken out of the employer's tax savings. No standard price. */
@@ -261,13 +263,13 @@ export const DEFAULT_PROPOSAL_SETTINGS: ProposalSettings = {
   useRowDeduction: true,
   rowDeductionPer: 'check',
   benefitPackages: [
-    // Everyone gets virtual care. MEC is added for those whose savings can cover it.
-    { id: 'virtual', name: 'Virtual care only', monthlyCost: VIRTUAL_CARE_MONTHLY_COST },
-    { id: 'mec', name: 'MEC', monthlyCost: 55 },
+    // Every plan and tier is virtual care. In-Person Preventative (MEC, id 'mec') is an add-on on top (voluntaryBenefits) for those whose savings cover it.
+    { id: 'virtual', name: 'Virtual care', monthlyCost: VIRTUAL_CARE_MONTHLY_COST },
+    { id: 'mec', name: 'In-Person Preventative', monthlyCost: 55 },
     { id: 'standard', name: 'Standard', monthlyCost: 65 },
     { id: 'mec_plus', name: 'MEC Plus', monthlyCost: 95 },
   ],
-  benefitPackageId: 'mec',
+  benefitPackageId: 'virtual',
   allotmentThreshold: 159,
   programPrices: [159, 149, 139, 129],
   lowIncomeMax: 26000,
@@ -278,16 +280,17 @@ export const DEFAULT_PROPOSAL_SETTINGS: ProposalSettings = {
   noFederalTaxAs: 'warning',
   includeCommission: false,
   dedupe: false,
-  partTime: { enabled: true, deductionPerCheck: 180, allotmentThreshold: 74, maxHoursPerWeek: 29, maxAnnualGross: 20000, monthlyPrice: 74, benefitPackageId: 'mec' },
+  partTime: { enabled: true, deductionPerCheck: 180, allotmentThreshold: 74, maxHoursPerWeek: 29, maxAnnualGross: 20000, monthlyPrice: 74, benefitPackageId: 'virtual' },
   pricingMode: 'standard',
   tiers: [
-    { id: 'plus', name: 'Plus', deductionByFrequency: { monthly: 1293, semimonthly: 646.5, biweekly: 596.77, weekly: 298.38 }, monthlyPrice: 159, allotmentCutoff: 149, benefitPackageId: 'mec', fullTimeRules: true, enabled: true },
-    { id: 'standard', name: 'Standard', deductionByFrequency: { monthly: 1040, semimonthly: 520, biweekly: 480, weekly: 240 }, monthlyPrice: 117, allotmentCutoff: 120, benefitPackageId: 'mec', fullTimeRules: false, enabled: true },
-    { id: 'basic', name: 'Basic', deductionByFrequency: { monthly: 780, semimonthly: 390, biweekly: 360, weekly: 180 }, monthlyPrice: 74, allotmentCutoff: 74, benefitPackageId: 'mec', fullTimeRules: false, enabled: true },
+    { id: 'plus', name: 'Plus', deductionByFrequency: { monthly: 1293, semimonthly: 646.5, biweekly: 596.77, weekly: 298.38 }, monthlyPrice: 159, allotmentCutoff: 149, benefitPackageId: 'virtual', fullTimeRules: true, enabled: true },
+    { id: 'standard', name: 'Standard', deductionByFrequency: { monthly: 1040, semimonthly: 520, biweekly: 480, weekly: 240 }, monthlyPrice: 117, allotmentCutoff: 120, benefitPackageId: 'virtual', fullTimeRules: false, enabled: true },
+    { id: 'basic', name: 'Basic', deductionByFrequency: { monthly: 780, semimonthly: 390, biweekly: 360, weekly: 180 }, monthlyPrice: 74, allotmentCutoff: 74, benefitPackageId: 'virtual', fullTimeRules: false, enabled: true },
     { id: 'essential', name: 'Essential', deductionByFrequency: { monthly: 520, semimonthly: 260, biweekly: 240, weekly: 120 }, monthlyPrice: 31, allotmentCutoff: 60, benefitPackageId: 'virtual', fullTimeRules: false, enabled: true },
   ],
   hceCap: { enabled: true, payOver: 160000, maxTierId: 'standard' },
   voluntaryBenefits: [
+    { id: 'mec', name: 'In-Person Preventative', monthlyCost: 55, selected: true, onlyIfAffordable: true },
     { id: 'dental', name: 'Dental', monthlyCost: 30, selected: false },
     { id: 'vision', name: 'Vision', monthlyCost: 20, selected: false },
   ],
@@ -453,7 +456,7 @@ export interface ProposalEmployeeResult extends Partial<PlanCalc> {
    * Enrolled employees: their monthly allotment less the plan price and any selected add-ons. What is left is the
    * voluntary benefit surplus; negative means the add-ons cost more than their savings cover.
    */
-  voluntary?: { price: number; addOns: { id: string; name: string; monthlyCost: number }[]; addOnCost: number; surplus: number };
+  voluntary?: { price: number; addOns: { id: string; name: string; monthlyCost: number }[]; addOnCost: number; surplus: number; /** Add-ons (MEC) left off because their savings do not cover them. */ without?: string[] };
   /** Tier pricing only: the tier the employee was placed in. */
   tier?: { id: string; name: string; deductionPerCheck: number; monthlyPrice: number; allotmentCutoff: number; allotment: number; capped?: string };
 }
@@ -560,7 +563,7 @@ export interface ProposalSummary {
   /** Employer tax savings less the admin fee: what the employer keeps. Valuation uses this. */
   employerNetAnnualSavings: number;
   /** Selected add-ons and the enrolled employees' voluntary benefit surplus a month (sums at the participation rate). */
-  voluntary: { addOns: { id: string; name: string; monthlyCost: number }[]; addOnMonthlyCost: number; surplusMonthly: number; shortfalls: number };
+  voluntary: { addOns: { id: string; name: string; monthlyCost: number; onlyIfAffordable?: boolean; enrolled?: number }[]; addOnMonthlyCost: number; surplusMonthly: number; shortfalls: number };
   /** Employee annual tax savings of eligible employees by tax type (participation applied). */
   employeeAnnualTaxSavingsBy: SavingsBreakdown;
   valuationIncrease: number;
@@ -1388,6 +1391,13 @@ export function mergePackages(saved?: BenefitPackage[]): BenefitPackage[] {
   return [...defaults.map((p) => ({ ...p, ...(byId.get(p.id) ?? {}) })), ...saved.filter((p) => !defaults.some((d) => d.id === p.id))];
 }
 
+/** A saved list of add-ons plus any default add-on it does not have yet. An add-on new to a saved proposal starts unselected, so its numbers do not change. */
+export function mergeAddOns(saved?: VoluntaryBenefit[]): VoluntaryBenefit[] {
+  const defaults = DEFAULT_PROPOSAL_SETTINGS.voluntaryBenefits;
+  if (!saved?.length) return defaults.map((v) => ({ ...v }));
+  return [...defaults.map((d) => { const v = saved.find((x) => x.id === d.id); return v ? { ...d, ...v } : { ...d, selected: false }; }), ...saved.filter((v) => !defaults.some((d) => d.id === v.id))];
+}
+
 export function runProposal(rows: CensusRow[], settings: Partial<ProposalSettings> = {}, db: TaxDatabase = loadTaxDatabase()): ProposalResult {
   const s: ProposalSettings = {
     ...DEFAULT_PROPOSAL_SETTINGS,
@@ -1401,7 +1411,7 @@ export function runProposal(rows: CensusRow[], settings: Partial<ProposalSetting
     hceCap: { ...DEFAULT_PROPOSAL_SETTINGS.hceCap, ...(settings.hceCap ?? {}) },
     // Saved proposals keep their own package costs, and pick up packages added since (such as virtual care only).
     benefitPackages: mergePackages(settings.benefitPackages),
-    voluntaryBenefits: settings.voluntaryBenefits?.length ? settings.voluntaryBenefits : DEFAULT_PROPOSAL_SETTINGS.voluntaryBenefits,
+    voluntaryBenefits: mergeAddOns(settings.voluntaryBenefits),
     adminFee: { ...DEFAULT_PROPOSAL_SETTINGS.adminFee, ...(settings.adminFee ?? {}) },
     overrides: settings.overrides ?? {},
     participationRate: settings.participationRate ?? DEFAULT_PROPOSAL_SETTINGS.participationRate,
@@ -1422,15 +1432,27 @@ export function runProposal(rows: CensusRow[], settings: Partial<ProposalSetting
   const skip = new Set(s.dedupe ? duplicates.map((d) => d.rowNumber) : []);
   const employees = rows.filter((r) => !skip.has(r.rowNumber)).map((r) => evaluateEmployee({ ...r }, s, db));
 
-  // Voluntary benefits: each enrolled employee's savings less the plan price and the selected add-ons.
-  const addOns = s.voluntaryBenefits.filter((v) => v.selected && v.monthlyCost > 0).map((v) => ({ id: v.id, name: v.name, monthlyCost: v.monthlyCost }));
+  // Voluntary benefits: each enrolled employee's savings less the plan price and their add-ons. MEC (onlyIfAffordable)
+  // goes on top of the plan only for those whose savings cover it; the others keep the plan (virtual care) alone.
+  const chosen = s.voluntaryBenefits.filter((v) => v.selected && v.monthlyCost > 0);
+  const addOns = chosen.map((v) => ({ id: v.id, name: v.name, monthlyCost: v.monthlyCost, ...(v.onlyIfAffordable ? { onlyIfAffordable: true } : {}) }));
   const addOnCost = r2(addOns.reduce((a, v) => a + v.monthlyCost, 0));
   for (const e of employees) {
     const allot = e.eligibility === 'Eligible' ? e.monthly?.allotment : e.eligibility === 'PT Eligible' ? e.partTime?.allotment : undefined;
     if (allot === undefined) continue;
     const price = e.eligibility === 'PT Eligible' ? s.partTime.monthlyPrice ?? 0 : e.tier ? e.tier.monthlyPrice : s.allotmentThreshold;
-    e.voluntary = { price, addOns, addOnCost, surplus: r2(allot - price - addOnCost) };
-    if (e.voluntary.surplus < 0 && addOns.length) e.flags.push(`The ${addOns.map((a) => a.name.toLowerCase()).join(' and ')} add-on${addOns.length > 1 ? 's' : ''} (${usd(addOnCost)} a month) cost more than the ${usd(r2(allot - price))} left after the plan price.`);
+    const required = chosen.filter((v) => !v.onlyIfAffordable);
+    let left = r2(allot - price - required.reduce((a, v) => a + v.monthlyCost, 0));
+    const mine: VoluntaryBenefit[] = [];
+    const without: string[] = [];
+    for (const v of chosen) {
+      if (!v.onlyIfAffordable) { mine.push(v); continue; }
+      if (left >= v.monthlyCost) { mine.push(v); left = r2(left - v.monthlyCost); } else without.push(v.name);
+    }
+    const own = mine.map((v) => ({ id: v.id, name: v.name, monthlyCost: v.monthlyCost }));
+    const ownCost = r2(own.reduce((a, v) => a + v.monthlyCost, 0));
+    e.voluntary = { price, addOns: own, addOnCost: ownCost, surplus: r2(allot - price - ownCost), ...(without.length ? { without } : {}) };
+    if (required.length && r2(allot - price - required.reduce((a, v) => a + v.monthlyCost, 0)) < 0) e.flags.push(`The ${required.map((a) => a.name.toLowerCase()).join(' and ')} add-on${required.length > 1 ? 's' : ''} (${usd(r2(required.reduce((a, v) => a + v.monthlyCost, 0)))} a month) cost more than the ${usd(r2(allot - price))} left after the plan price.`);
   }
 
   const byEligibility: Record<string, number> = {};
@@ -1482,7 +1504,7 @@ export function runProposal(rows: CensusRow[], settings: Partial<ProposalSetting
       employeeAnnualTaxSavings: r2(sum(full.map((e) => e.monthly!.employeeTaxSavings * 12).concat(pt.map((e) => e.partTime!.calc.monthly.employeeTaxSavings * 12))) * rate),
       adminFee: { amount: fee, per: s.adminFee.per, annual: feeAnnual },
       employerNetAnnualSavings: erNet,
-      voluntary: { addOns, addOnMonthlyCost: addOnCost, surplusMonthly: r2(withVol.reduce((a, e) => a + e.voluntary!.surplus, 0) * rate), shortfalls: withVol.filter((e) => e.voluntary!.surplus < 0).length },
+      voluntary: { addOns: addOns.map((a) => ({ ...a, enrolled: withVol.filter((e) => e.voluntary!.addOns.some((x) => x.id === a.id)).length })), addOnMonthlyCost: addOnCost, surplusMonthly: r2(withVol.reduce((a, e) => a + e.voluntary!.surplus, 0) * rate), shortfalls: withVol.filter((e) => e.voluntary!.surplus < 0).length },
       valuationIncrease: r2(erNet * s.ebitdaMultiple),
       employeeAnnualTaxSavingsBy: (() => {
         const by: SavingsBreakdown = { federalIncome: 0, fica: 0, stateIncome: 0, local: 0, statePrograms: 0 };
