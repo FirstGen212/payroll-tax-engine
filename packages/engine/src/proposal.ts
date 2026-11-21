@@ -738,7 +738,6 @@ function evaluateRules(row: CensusRow, s: ProposalSettings, db: TaxDatabase): Pr
   const { input, notes } = payInputFromRow(row, freq, gross, s, otherComp);
   res.flags.push(...notes);
   const existing = (input.deductions ?? []).reduce((a, d) => a + (d.amount ?? (d.percent ?? 0) * gross), 0);
-  const noFed = row.federalTaxPaid === false;
   CONTEXT.set(res, { freq, gross, otherComp, dedPerCheck, existing: r2(existing), date: checkDatesFor(s.year, freq)[0] });
 
   if (dedPerCheck + existing > gross + otherComp) {
@@ -753,6 +752,9 @@ function evaluateRules(row: CensusRow, s: ProposalSettings, db: TaxDatabase): Pr
   const m = res.monthly!;
 
   const fitBefore = res.annual!.before.fit;
+  // "No federal tax" comes from the engine's own withholding calculation (W-4, pay, deductions, state), never from the file's yes/no column.
+  // The file's answer is only compared with it, below.
+  const noFed = fitBefore === 0;
   if (row.federalTaxPaid === true && fitBefore === 0) res.flags.push('Sheet says federal tax is withheld, but the engine calculates none from this W-4 and pay.');
   if (row.federalTaxPaid === false && fitBefore > 0) res.flags.push(`Sheet says no federal tax is withheld, but the engine calculates ${usd(fitBefore / periods)} per check.`);
   const hasSit = db.rules.some((r) => r.jurisdiction === row.workState && r.kind === 'SIT' && r.calc.kind !== 'none');
@@ -765,7 +767,7 @@ function evaluateRules(row: CensusRow, s: ProposalSettings, db: TaxDatabase): Pr
   } else if (annualGross <= s.lowIncomeMax) {
     fail('Not Eligible - Low Income', `Annual gross ${usd(annualGross)} is at or below ${usd(s.lowIncomeMax)}.`, 'low-income');
   } else if (noFed && s.noFederalTaxAs === 'status') {
-    fail('No Federal Taxes Paid', 'No federal income tax is withheld today according to the file; review before enrolling.', 'no-federal-tax');
+    fail('No Federal Taxes Paid', 'The engine calculates no federal income tax withheld for this W-4 and pay; review before enrolling.', 'no-federal-tax');
   } else if (m.allotment >= s.needsReviewAllotment) {
     fail('NEEDS REVIEW', `Monthly allotment ${usd(m.allotment)} is at or above the ${usd(s.needsReviewAllotment)} review threshold.`, 'high-savings');
   } else if (hoursPerPeriod === undefined) {
@@ -778,7 +780,7 @@ function evaluateRules(row: CensusRow, s: ProposalSettings, db: TaxDatabase): Pr
     res.eligibility = 'Eligible';
   }
   // Everything except the allotment test (for the price-point analyzer)
-  if (noFed && s.noFederalTaxAs === 'warning') res.flags.unshift('⚠ No federal income tax withheld today according to the file.');
+  if (noFed && s.noFederalTaxAs === 'warning') res.flags.unshift('⚠ The engine calculates no federal income tax withheld for this W-4 and pay.');
   res.passesNonSavingsRules = annualGross > s.lowIncomeMax && !(noFed && s.noFederalTaxAs === 'status') && hoursPerPeriod !== undefined && hoursPerPeriod >= s.minHoursPerPeriod;
   return applyStatusOverride(tryPartTime(res, input, freq, gross, s, db), input, freq, gross, s, db);
 }
@@ -814,7 +816,8 @@ function applyStatusOverride(res: ProposalEmployeeResult, input: PayInput, freq:
 function tryPartTime(res: ProposalEmployeeResult, input: PayInput, freq: PayFrequency, gross: number, s: ProposalSettings, db: TaxDatabase): ProposalEmployeeResult {
   const pt = s.partTime;
   if (!pt?.enabled || res.eligibility === 'Eligible' || res.eligibility === 'NEEDS REVIEW' || res.eligibility === 'No Federal Taxes Paid') return res;
-  if (res.eligibility === 'Not Eligible - No Gross Compensation' || res.eligibility.includes('No Federal Taxes Paid')) return res;
+  // The part-time plan is tried whether or not they pay federal income tax: its savings are recalculated on the smaller deduction.
+  if (res.eligibility === 'Not Eligible - No Gross Compensation') return res;
   const triggers: string[] = [];
   if (res.hoursPerWeek !== undefined && res.hoursPerWeek <= pt.maxHoursPerWeek) triggers.push(`≤${pt.maxHoursPerWeek}hrs`);
   if (res.annualGross !== undefined && res.annualGross < pt.maxAnnualGross) triggers.push(`<$${Math.round(pt.maxAnnualGross / 1000)}k/yr`);
@@ -910,9 +913,6 @@ function savingsReason(res: ProposalEmployeeResult, c: EvalContext, s: ProposalS
   const hasSit = db.rules.some((r) => r.jurisdiction === row.workState && r.kind === 'SIT' && r.calc.kind !== 'none');
   const noSit = hasSit ? '' : ` ${state} has no state income tax, so nothing is saved there either.`;
 
-  if (row.federalTaxPaid === false) {
-    return `${head} ${rate} The payroll file shows no federal income tax withheld for them today, so the plan can mostly reduce only ${ficaWords(row, s)}.${noSit}`;
-  }
   const st = parseFederalStatus(row.federalFilingStatus) ?? 'single';
   const credits = row.dependentCredits && row.dependentCredits > 0 ? row.dependentCredits : 0;
   const allowances = !credits && row.dependentAllowances && row.dependentAllowances > 0 ? row.dependentAllowances : 0;
