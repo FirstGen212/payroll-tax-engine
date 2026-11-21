@@ -15,6 +15,8 @@
 import {
   CONVENIENCE_OF_EMPLOYER,
   DEDUCTION_TYPES,
+  section125BenefitOf,
+  section125RuleOf,
   EARNING_TYPES,
   FUTA_CREDIT_REDUCTION,
   IRS_BY_THE_BOOK,
@@ -165,21 +167,39 @@ export function calculatePay(input: PayInput, db: TaxDatabase = loadTaxDatabase(
   }
 
   // ---------- Taxable wages ----------
-  const wagesFor = (basis: WageBasis, state?: string): number => {
+  /**
+   * Taxable wages for a basis. State and local bases read overrides keyed by the local jurisdiction code first
+   * (one place, e.g. Philadelphia), then by its state. Section 125 treatment by state and place comes from
+   * packages/tax-data/src/section125.ts through these overrides.
+   */
+  const wagesFor = (basis: WageBasis, state?: string, localCode?: string): number => {
     if (basis === 'GROSS') return sum(earnings.filter((e) => Object.values(e.type.taxability).some((v) => v !== false)).map((e) => e.amount));
     let effective: WageBasis = basis;
     if (basis === 'LOCAL' && conv.localWageBasis !== 'local_rules') effective = conv.localWageBasis === 'medicare' ? 'MEDICARE' : conv.localWageBasis === 'state' ? 'SIT' : 'GROSS';
     if (effective === 'GROSS') return wagesFor('GROSS');
     const useState = effective === 'SIT' || effective === 'SUI' || effective === 'SDI' || effective === 'LOCAL';
-    const earn = sum(earnings.filter((e) => {
-      const ov = useState && state ? e.type.stateOverrides?.[state]?.[effective] : undefined;
-      return (ov ?? e.type.taxability[effective]) !== false;
-    }).map((e) => e.amount));
-    const red = sum(resolvedDeds.filter((d) => {
-      const ov = useState && state ? d.type.stateOverrides?.[state]?.[effective] : undefined;
-      return (ov ?? d.type.reducesWages[effective]) === true && !d.type.employerPaid;
-    }).map((d) => d.amount));
+    const ovOf = (ov: Record<string, Partial<Record<WageBasis, boolean>>> | undefined) =>
+      !useState || !ov ? undefined : (localCode ? ov[localCode]?.[effective] : undefined) ?? (state ? ov[state]?.[effective] : undefined);
+    const earn = sum(earnings.filter((e) => (ovOf(e.type.stateOverrides) ?? e.type.taxability[effective]) !== false).map((e) => e.amount));
+    const red = sum(resolvedDeds.filter((d) => (ovOf(d.type.stateOverrides) ?? d.type.reducesWages[effective]) === true && !d.type.employerPaid).map((d) => d.amount));
     return Math.max(0, earn - red);
+  };
+  /** Explanation line for a state or local tax when a Section 125 deduction is on the check. */
+  const s125Note = (basis: 'SIT' | 'LOCAL' | 'SDI' | 'SUI', state?: string, localCode?: string): string[] => {
+    const s125 = resolvedDeds.filter((d) => !d.type.employerPaid && d.amount > 0 && section125BenefitOf(d.type.category));
+    if (!s125.length) return [];
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const d of s125) {
+      const rule = section125RuleOf(section125BenefitOf(d.type.category)!, basis, state, localCode);
+      const reduces = rule ? rule.reduces : d.type.reducesWages[basis] === true;
+      const k = `${reduces}|${rule?.jurisdiction ?? ''}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      const what = s125.filter((x) => { const r = section125RuleOf(section125BenefitOf(x.type.category)!, basis, state, localCode); return (r ? r.reduces : x.type.reducesWages[basis] === true) === reduces; }).map((x) => x.type.name).join(', ');
+      out.push(`Section 125: ${what} ${reduces ? 'lowers' : 'does not lower'} the wages for this tax${rule ? ` (${rule.status}${rule.sources.length ? `, ${rule.sources.join(', ')}` : ''})` : ''}`);
+    }
+    return out;
   };
   const supplementalFor = (basis: WageBasis, state?: string) =>
     sum(earnings.filter((e) => e.supplemental && ((state ? e.type.stateOverrides?.[state]?.[basis] : undefined) ?? e.type.taxability[basis]) !== false).map((e) => e.amount));
@@ -364,7 +384,7 @@ export function calculatePay(input: PayInput, db: TaxDatabase = loadTaxDatabase(
     let amount = res.amount * share;
     if (conv.sitRounding === 'dollar') amount = dollars(amount, conv.roundingMode);
     amount = rnd(Math.max(0, amount));
-    return { ruleId: r.id, jurisdiction: state, kind: 'SIT', name: r.name, payer: 'employee', wageBasis: 'SIT', taxableWages: rnd(wages * share), amount, rate: wages ? amount / (wages * share) : undefined, status: r.status, sources: r.sources, explanation: [`${role}${share < 1 ? ` (allocation ${(share * 100).toFixed(1)}%, proportional method)` : ''}`, ...res.lines] };
+    return { ruleId: r.id, jurisdiction: state, kind: 'SIT', name: r.name, payer: 'employee', wageBasis: 'SIT', taxableWages: rnd(wages * share), amount, rate: wages ? amount / (wages * share) : undefined, status: r.status, sources: r.sources, explanation: [`${role}${share < 1 ? ` (allocation ${(share * 100).toFixed(1)}%, proportional method)` : ''}`, ...res.lines, ...s125Note('SIT', state)] };
   };
   const workTaxByState = new Map<string, number>();
   for (const [ws, share] of workStates) {
@@ -400,12 +420,13 @@ export function calculatePay(input: PayInput, db: TaxDatabase = loadTaxDatabase(
     if (!programKinds.has(r.kind)) continue;
     if (!isOn(r)) { log('toggles', `${r.name} is switched off (optional or toggled)`); continue; }
     const w = wagesFor(r.wageBasis, uiState);
-    push(applyRule(r, w), w);
+    const b = r.wageBasis;
+    push(applyRule(r, w, { extra: b === 'SDI' || b === 'SUI' || b === 'SIT' ? s125Note(b, uiState) : [] }), w);
   }
   // Oregon statewide transit also applies to OR residents working elsewhere
   if (residence === 'OR' && uiState !== 'OR') {
     const r = rulesOn(db, 'OR', date, 'TRANSIT_EE')[0];
-    if (r && isOn(r)) push(applyRule(r, wagesFor('GROSS'), { extra: ['Oregon resident working outside Oregon'] }));
+    if (r && isOn(r)) push(applyRule(r, wagesFor(r.wageBasis, 'OR'), { extra: ['Oregon resident working outside Oregon', ...s125Note('SIT', 'OR')] }));
   }
 
   // ---------- 5. Locals ----------
@@ -442,7 +463,7 @@ export function calculatePay(input: PayInput, db: TaxDatabase = loadTaxDatabase(
       const rule = resRule ?? rulesOn(db, pc.code, date).find((r) => r.kind === 'LIT_EE');
       if (!rule || !isOn(rule)) continue;
       const amount = rnd(wages * pc.share * pc.rate);
-      const line: TaxLine = { ruleId: rule.id, jurisdiction: paRes ?? pc.code, kind: 'LIT_EE', name: `PA local earned income tax (Act 32)${pc.code !== paRes ? ` - work PSD ${pc.code}` : ''}`, payer: 'employee', wageBasis: 'LOCAL', taxableWages: rnd(wages * pc.share), amount, rate: pc.rate, status: rule.status, sources: rule.sources, explanation: [`Act 32: ${pc.why}`, `${(wages * pc.share).toFixed(2)} x ${(pc.rate * 100).toFixed(3)}%`] };
+      const line: TaxLine = { ruleId: rule.id, jurisdiction: paRes ?? pc.code, kind: 'LIT_EE', name: `PA local earned income tax (Act 32)${pc.code !== paRes ? ` - work PSD ${pc.code}` : ''}`, payer: 'employee', wageBasis: 'LOCAL', taxableWages: rnd(wages * pc.share), amount, rate: pc.rate, status: rule.status, sources: rule.sources, explanation: [`Act 32: ${pc.why}`, `${(wages * pc.share).toFixed(2)} x ${(pc.rate * 100).toFixed(3)}%`, ...s125Note('LOCAL', 'PA')] };
       push(line);
     }
     if (paRes) paHandled.add(paRes);
@@ -460,7 +481,8 @@ export function calculatePay(input: PayInput, db: TaxDatabase = loadTaxDatabase(
     const workShare = workLocals.get(code) ?? 0;
     for (const r of rulesOn(db, code, date)) {
       if (!isOn(r)) { log('toggles', `${r.name} switched off`); continue; }
-      const wages = wagesFor('LOCAL', lstate);
+      const wages = wagesFor('LOCAL', lstate, code);
+      const note = s125Note('LOCAL', lstate, code);
       if (r.kind === 'LST_EE' || r.kind === 'OPT_EE' || r.kind === 'OPT_ER') {
         if (workShare > 0) push(applyRule(r, wages));
         continue;
@@ -468,7 +490,7 @@ export function calculatePay(input: PayInput, db: TaxDatabase = loadTaxDatabase(
       if (a.residenceAsOfJan1) {
         if (inResCounty && code !== inResCounty) continue; // IN resident: only resident county
         const share = code === inResCounty ? 1 : workShare;
-        push(applyRule(r, wages, { share, extra: [code === inResCounty ? 'Indiana county of residence (Jan 1)' : 'Nonresident of Indiana: county of principal employment'] }));
+        push(applyRule(r, wages, { share, extra: [code === inResCounty ? 'Indiana county of residence (Jan 1)' : 'Nonresident of Indiana: county of principal employment', ...note] }));
         continue;
       }
       if (r.appliesTo === 'resident' && !isRes) continue;
@@ -481,21 +503,21 @@ export function calculatePay(input: PayInput, db: TaxDatabase = loadTaxDatabase(
           continue;
         }
         const nyW4 = lstate === 'NY' ? emp.stateW4?.NY ?? {} : {};
-        push(applyRule(r, wages, { context: { w4: nyW4 } }));
+        push(applyRule(r, wages, { context: { w4: nyW4 }, extra: note }));
         continue;
       }
       if (r.payer === 'employer') {
-        if (workShare > 0) push(applyRule(r, wages, { share: workShare }));
+        if (workShare > 0) push(applyRule(r, wages, { share: workShare, extra: note }));
         continue;
       }
       // Generic resident / nonresident local income tax (OH, MI, KY, MO, AL, DE, ...)
       if (workShare > 0 && !isRes) {
-        const line = applyRule(r, wages, { share: workShare, calc: r.nonresidentCalc ?? r.calc, extra: ['Nonresident working here'] });
+        const line = applyRule(r, wages, { share: workShare, calc: r.nonresidentCalc ?? r.calc, extra: ['Nonresident working here', ...note] });
         if (line) { push(line); localTax.push(line); }
       }
       if (isRes) {
         if (workShare === 0 && lstate === 'OH' && er.withholdResidentLocal === false) { log('locals', `${r.name}: employer does not courtesy-withhold resident city tax`); continue; }
-        const line = applyRule(r, wages, { extra: [workShare > 0 ? 'Resident (works here too)' : 'Resident'] });
+        const line = applyRule(r, wages, { extra: [workShare > 0 ? 'Resident (works here too)' : 'Resident', ...note] });
         if (line) {
           // Resident credit for other-city tax withheld (OH style credit percent and rate limit)
           const others = localTax.filter((t) => t.jurisdiction !== code && stateOfLocal(t.jurisdiction) === lstate);
@@ -514,7 +536,7 @@ export function calculatePay(input: PayInput, db: TaxDatabase = loadTaxDatabase(
   // Maryland special nonresident tax
   if (workStates.has('MD') && residence !== 'MD' && !findReciprocity('MD', residence, date)) {
     const r = rulesOn(db, 'MD-NONRESIDENT', date)[0];
-    if (r && isOn(r)) push(applyRule(r, wagesFor('LOCAL', 'MD'), { share: workStates.get('MD'), calc: r.nonresidentCalc ?? r.calc, extra: ['Nonresident working in Maryland'] }));
+    if (r && isOn(r)) push(applyRule(r, wagesFor('LOCAL', 'MD', 'MD-NONRESIDENT'), { share: workStates.get('MD'), calc: r.nonresidentCalc ?? r.calc, extra: ['Nonresident working in Maryland', ...s125Note('LOCAL', 'MD')] }));
   }
 
   // ---------- 6. Garnishments and post-tax deductions ----------

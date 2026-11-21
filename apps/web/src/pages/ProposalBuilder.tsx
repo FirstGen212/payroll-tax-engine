@@ -410,6 +410,7 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
             </table></div>
           </div>
 
+          {s.employeeAnnualTaxSavingsBy && <p className="small" style={{ margin: '0 0 8px' }}>Employees save <b>{money(s.employeeAnnualTaxSavings)}</b> in taxes a year: {savingsWords(s.employeeAnnualTaxSavingsBy)}. State and local taxes count only where that state or city lets the Section 125 deduction lower its taxable wages (New Jersey, Philadelphia and Kentucky cities and counties do not).</p>}
           <div className="kpis">
             <div className="kpi"><div className="l">Eligible employees</div><div className="v">{s.eligibleTotal} <span className="s" style={{ fontSize: '1rem' }}>of {s.employees}</span></div>
               <div className="fg-bar"><span style={{ width: `${(s.eligibleFull / s.employees) * 100}%` }} /><span style={{ width: `${(s.eligiblePartTime / s.employees) * 100}%` }} /></div>
@@ -463,10 +464,11 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
                         {e.check && (
                           <table style={{ maxWidth: 760, margin: '8px 0' }}>
                             <thead><tr><th>Per check</th><th className="num">Before</th><th className="num">With First Gen</th><th>Full year</th><th className="num">Before</th><th className="num">With First Gen</th></tr></thead>
-                            <tbody>{[['Gross', 'gross'], ['First Gen deduction', 'newDeduction'], ['Other deductions', 'otherDeductions'], ['Federal income tax', 'fit'], ['Social Security + Medicare', 'fica'], ['State and local', 'stateLocal'], ['Employer taxes', 'employerTaxes']].map(([l, k]) => (
+                            <tbody>{[['Gross', 'gross'], ['First Gen deduction', 'newDeduction'], ['Other deductions', 'otherDeductions'], ['Federal income tax', 'fit'], ['Social Security + Medicare', 'fica'], ...(e.check.before.stateIncome === undefined ? [['State and local', 'stateLocal']] : [['State income tax', 'stateIncome'], ['Local taxes', 'local'], ['State programs (disability, leave)', 'statePrograms']]), ['Employer taxes', 'employerTaxes']].map(([l, k]) => (
                               <tr key={k}><td>{l}</td><td className="num">{money(e.check.before[k])}</td><td className="num">{money(e.check.after[k])}</td><td /><td className="num">{money(e.annual.before[k])}</td><td className="num">{money(e.annual.after[k])}</td></tr>
                             ))}
                               <tr><td>Employee tax savings / month</td><td /><td className="num">{money(e.monthly.employeeTaxSavings)}</td><td>Allotment ({Math.round(result.settings.allotmentBuffer * 100)}%)</td><td /><td className="num">{money(e.monthly.allotment)}</td></tr>
+                              {e.monthly.savingsBy && <tr><td colSpan={6} className="small muted">Savings a month by tax: {savingsWords(e.monthly.savingsBy)}</td></tr>}
                             </tbody>
                           </table>
                         )}
@@ -528,6 +530,7 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
             <tr><td>Employer savings per enrolled employee per year</td><td className="num">{money(s.employerAnnualSavings.perEmployee)}</td></tr>
             {!s.retirement && <tr><td>Valuation increase at {result.settings.ebitdaMultiple}x EBITDA</td><td className="num"><b>{money(s.valuationIncrease)}</b></td></tr>}
             <tr><td>Employee tax savings per year</td><td className="num">{money(s.employeeAnnualTaxSavings)}</td></tr>
+            {s.employeeAnnualTaxSavingsBy && SAVINGS_PARTS.filter(([k]) => s.employeeAnnualTaxSavingsBy[k]).map(([k, l]) => <tr key={k}><td style={{ paddingLeft: 24 }}>{l}</td><td className="num">{money(s.employeeAnnualTaxSavingsBy[k])}</td></tr>)}
           </tbody></table>
           <h3>Who qualifies</h3>
           <table style={{ maxWidth: 640 }}><tbody>{ORDER.filter((k) => s.byEligibility[k]).map((k) => <tr key={k}><td>{k}</td><td className="num">{s.byEligibility[k]}</td></tr>)}</tbody></table>
@@ -674,4 +677,14 @@ function History({ id, onLoad, editable }: any) {
       </table></div>
     </div>
   );
+}
+
+const SAVINGS_PARTS: [string, string][] = [['federalIncome', 'Federal income tax'], ['fica', 'Social Security and Medicare'], ['stateIncome', 'State income tax'], ['local', 'Local taxes'], ['statePrograms', 'State disability and leave programs']];
+/** The same labels as they read inside a sentence. */
+const SAVINGS_WORDS: Record<string, string> = { federalIncome: 'federal income tax', fica: 'Social Security and Medicare', stateIncome: 'state income tax', local: 'local taxes', statePrograms: 'state disability and leave programs' };
+
+/** "federal income tax $40.00, Social Security and Medicare $30.60, state income tax $12.00" (parts that are zero are left out). */
+function savingsWords(by: Record<string, number>): string {
+  const parts = SAVINGS_PARTS.filter(([k]) => Math.abs(by[k] ?? 0) >= 0.005).map(([k]) => `${SAVINGS_WORDS[k]} ${money(by[k])}`);
+  return parts.length ? parts.join(', ') : 'none';
 }

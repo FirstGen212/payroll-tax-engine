@@ -6,7 +6,7 @@ import { existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
-import { BENEFIT_LIMITS, DEDUCTION_TYPES, EARNING_TYPES, RECIPROCITY, RETIREMENT_SYSTEMS, SOURCES, STATES, rulesOn } from '@pte/tax-data';
+import { BENEFIT_LIMITS, DEDUCTION_TYPES, EARNING_TYPES, RECIPROCITY, RETIREMENT_SYSTEMS, SECTION125_OPEN, SECTION125_RULES, SOURCES, STATES, rulesOn } from '@pte/tax-data';
 import { calculatePay, compareScenarios, learnVendorProfile, totalsOf } from '@pte/engine';
 import type { PayInput, PayResult } from '@pte/engine';
 import { pool, q, tx } from './db.js';
@@ -45,7 +45,7 @@ app.get('/api/health', async () => ({ ok: true }));
 
 app.get('/api/reference', async () => {
   const vendors = await q('select id, name, status, conventions, sample_count, notes from vendor_profile order by id');
-  return { earningTypes: EARNING_TYPES, deductionTypes: DEDUCTION_TYPES, limits: BENEFIT_LIMITS, retirementSystems: RETIREMENT_SYSTEMS, reciprocity: RECIPROCITY, sources: SOURCES, vendors, states: STATES.map((s) => ({ code: s.code, name: s.name, type: s.type, flags: s.flags, agency: s.agency, notes: s.notes })) };
+  return { earningTypes: EARNING_TYPES, deductionTypes: DEDUCTION_TYPES, limits: BENEFIT_LIMITS, retirementSystems: RETIREMENT_SYSTEMS, reciprocity: RECIPROCITY, sources: SOURCES, section125: { rules: SECTION125_RULES, open: SECTION125_OPEN }, vendors, states: STATES.map((s) => ({ code: s.code, name: s.name, type: s.type, flags: s.flags, agency: s.agency, notes: s.notes })) };
 });
 
 app.get('/api/jurisdictions', async (req) => {

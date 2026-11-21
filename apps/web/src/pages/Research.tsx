@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api, pct } from '../api';
-import { Badge, PageHead, StateSelect } from '../components';
+import { Badge, PageHead, StateSelect, useReference } from '../components';
 
 function calcSummary(c: any): string {
   if (!c) return '';
@@ -22,6 +22,7 @@ export default function Research() {
   const [date, setDate] = useState('2027-01-01');
   const [rules, setRules] = useState<any[]>([]);
   const [status, setStatus] = useState('');
+  const ref = useReference();
   useEffect(() => { api('/coverage').then(setCov); }, []);
   useEffect(() => {
     // One request for the whole state; a slower earlier answer never replaces a newer one.
@@ -69,6 +70,39 @@ export default function Research() {
           ))}</tbody>
         </table>
       </div>
+      <Section125Panel state={state} data={ref?.section125} sources={ref?.sources} />
     </>
+  );
+}
+
+const BENEFIT_WORDS: Record<string, string> = { health: 'health premiums', fsa: 'FSAs', dependent_care: 'dependent care', hsa: 'HSAs' };
+const BASIS_WORDS: Record<string, string> = { SIT: 'State income tax', LOCAL: 'Local tax', SDI: 'Disability and leave', SUI: 'Unemployment' };
+
+/** Section 125 treatment for the selected state and its cities, from the audit table in tax-data. */
+function Section125Panel({ state, data, sources }: { state: string; data?: { rules: any[]; open: string[] }; sources?: any[] }) {
+  if (!data) return null;
+  const rows = data.rules.filter((r) => r.jurisdiction === state || r.jurisdiction.startsWith(`${state}-`));
+  const src = new Map((sources ?? []).map((s: any) => [s.id, s]));
+  const taxed = data.rules.filter((r) => !r.reduces && r.status !== 'unverified');
+  return (
+    <div className="panel">
+      <h3 style={{ marginTop: 0 }}>Section 125 and state and local taxes</h3>
+      <p className="small">A pre-tax Section 125 deduction always lowers federal income tax, Social Security, Medicare and FUTA wages. Whether it also lowers state and local taxes depends on the place. Taxes that keep it in wages: <b>{[...new Set(taxed.map((r) => r.tax))].join('; ')}</b>.</p>
+      {rows.length === 0 ? <p className="muted small">No Section 125 row for {state}: it has no wage-based income tax, so only federal taxes and any state programs are affected.</p> : (
+        <table>
+          <thead><tr><th>Tax</th><th>Covers</th><th>Section 125 lowers wages?</th><th>Status</th><th>Source and what it says</th></tr></thead>
+          <tbody>{rows.map((r, i) => (
+            <tr key={i}>
+              <td>{r.tax}<div className="muted small">{BASIS_WORDS[r.basis] ?? r.basis}</div></td>
+              <td className="small">{(r.benefits ?? Object.keys(BENEFIT_WORDS)).map((b: string) => BENEFIT_WORDS[b]).join(', ')}</td>
+              <td><span className={`fg-pill ${r.reduces ? 'fg-ok' : 'fg-warn'}`}>{r.reduces ? 'Yes' : 'No, stays taxable'}</span></td>
+              <td><Badge s={r.status} /></td>
+              <td className="small">{r.sources.map((id: string) => { const s: any = src.get(id); return s ? <div key={id}><a href={s.url} target="_blank" rel="noreferrer">{s.agency}: {s.title}</a></div> : <div key={id}>{id}</div>; })}<div className="muted">{r.notes}</div></td>
+            </tr>
+          ))}</tbody>
+        </table>
+      )}
+      <details><summary>Still open ({data.open.length})</summary><ul className="small">{data.open.map((o, i) => <li key={i}>{o}</li>)}</ul></details>
+    </div>
   );
 }

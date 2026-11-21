@@ -255,11 +255,32 @@ export const ELIGIBILITY_ORDER: Eligibility[] = [
   'Excluded',
 ];
 
+/** Employee tax savings by tax type. */
+export interface SavingsBreakdown {
+  federalIncome: number;
+  fica: number;
+  stateIncome: number;
+  local: number;
+  statePrograms: number;
+}
+
+export function savingsBreakdown(before: ScenarioTotals, after: ScenarioTotals, divisor = 1): SavingsBreakdown {
+  const d = (k: keyof ScenarioTotals) => r2((before[k] - after[k]) / divisor);
+  return { federalIncome: d('fit'), fica: d('fica'), stateIncome: d('stateIncome'), local: d('local'), statePrograms: d('statePrograms') };
+}
+
 export interface ScenarioTotals {
   gross: number;
   fit: number;
   fica: number;
+  /** State income tax plus state programs plus local taxes (employee). */
   stateLocal: number;
+  /** State (and territory) income tax. */
+  stateIncome: number;
+  /** Employee state programs: disability, family leave, paid leave, employee unemployment, transit, long-term care. */
+  statePrograms: number;
+  /** City, county, school district and other local taxes. */
+  local: number;
   employeeTaxes: number;
   employerTaxes: number;
   /** Employer Social Security + Medicare. */
@@ -297,6 +318,8 @@ export interface PlanCalc {
     allotment: number;
     /** Take-home change per month including the benefit payment back. */
     employeeNetGain: number;
+    /** Where the employee tax savings come from, per month (sums to employeeTaxSavings, give or take a cent). */
+    savingsBy: SavingsBreakdown;
   };
   /** Public retirement system contributions per year, before and after (public employers only). */
   retirement?: { system: string; memberBefore: number; memberAfter: number; employerBefore: number; employerAfter: number };
@@ -368,6 +391,8 @@ export interface ProposalSummary {
   /** Employer tax savings of eligible employees (basis per settings). */
   employerAnnualSavings: { total: number; full: number; partTime: number; perEmployee: number };
   employeeAnnualTaxSavings: number;
+  /** Employee annual tax savings of eligible employees by tax type (participation applied). */
+  employeeAnnualTaxSavingsBy: SavingsBreakdown;
   valuationIncrease: number;
   allotmentDistribution: { below: number; near: number; atOrAbove: number; lowEdge: number; highEdge: number };
   programs: ProgramAnalysis[];
@@ -472,7 +497,7 @@ export function checkDatesFor(year: number, freq: PayFrequency): string[] {
 }
 
 function totalsOf(results: PayResult[], deductionCode: string, benefitPerCheck: number): ScenarioTotals {
-  const t: ScenarioTotals = { gross: 0, fit: 0, fica: 0, stateLocal: 0, employeeTaxes: 0, employerTaxes: 0, employerFica: 0, newDeduction: 0, otherDeductions: 0, benefitPayment: 0, netPay: 0 };
+  const t: ScenarioTotals = { gross: 0, fit: 0, fica: 0, stateLocal: 0, stateIncome: 0, statePrograms: 0, local: 0, employeeTaxes: 0, employerTaxes: 0, employerFica: 0, newDeduction: 0, otherDeductions: 0, benefitPayment: 0, netPay: 0 };
   for (const r of results) {
     t.gross += r.grossPay;
     for (const x of r.taxes) {
@@ -482,7 +507,12 @@ function totalsOf(results: PayResult[], deductionCode: string, benefitPerCheck: 
       }
       if (x.kind === 'FIT') t.fit += x.amount;
       else if (x.kind === 'SS_EE' || x.kind === 'MED_EE' || x.kind === 'MED_ADDL_EE') t.fica += x.amount;
-      else t.stateLocal += x.amount;
+      else {
+        t.stateLocal += x.amount;
+        if (x.jurisdiction.length > 2 && x.jurisdiction !== 'US') t.local += x.amount;
+        else if (x.kind === 'SIT' || x.kind === 'TERR_WAGE_EE') t.stateIncome += x.amount;
+        else t.statePrograms += x.amount;
+      }
     }
     t.employeeTaxes += r.employeeTaxes;
     t.employerTaxes += r.employerTaxes;
@@ -648,6 +678,7 @@ function planCalc(input: PayInput, freq: PayFrequency, grossPerCheck: number, de
       employerTaxSavings: erTaxSav,
       allotment: r2(eeTaxSav * s.allotmentBuffer),
       employeeNetGain: r2((aA.netPay - aB.netPay) / 12),
+      savingsBy: savingsBreakdown(aB, aA, 12),
     },
     ...(rs ? { retirement: retirementTotals(rs, before, after, s) } : {}),
   };
@@ -1106,6 +1137,14 @@ export function runProposal(rows: CensusRow[], settings: Partial<ProposalSetting
       monthlySavings: { total: r2((msFull + msPt) * rate), full: r2(msFull * rate), partTime: r2(msPt * rate), average: full.length ? r2(msFull / full.length) : 0, annual: r2((msFull + msPt) * 12 * rate) },
       employerAnnualSavings: { total: erTotal, full: r2(erFull * rate), partTime: r2(erPt * rate), perEmployee: full.length ? r2(erFull / full.length) : 0 },
       employeeAnnualTaxSavings: r2(sum(full.map((e) => e.monthly!.employeeTaxSavings * 12).concat(pt.map((e) => e.partTime!.calc.monthly.employeeTaxSavings * 12))) * rate),
+      employeeAnnualTaxSavingsBy: (() => {
+        const by: SavingsBreakdown = { federalIncome: 0, fica: 0, stateIncome: 0, local: 0, statePrograms: 0 };
+        const add = (m?: SavingsBreakdown) => { if (m) for (const k of Object.keys(by) as (keyof SavingsBreakdown)[]) by[k] += m[k] * 12 * rate; };
+        for (const e of full) add(e.monthly!.savingsBy);
+        for (const e of pt) add(e.partTime!.calc.monthly.savingsBy);
+        for (const k of Object.keys(by) as (keyof SavingsBreakdown)[]) by[k] = r2(by[k]);
+        return by;
+      })(),
       valuationIncrease: r2(erTotal * s.ebitdaMultiple),
       allotmentDistribution: {
         below: withAllot.filter((e) => e.monthly!.allotment < lowEdge).length,
