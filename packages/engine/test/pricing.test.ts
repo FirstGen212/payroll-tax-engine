@@ -3,7 +3,7 @@ import { loadTaxDatabase } from '@pte/tax-data';
 import { analyzePrograms, planCacheStats, runProposal } from '../src/index.js';
 import type { CensusRow } from '../src/index.js';
 import { analyzePrograms as analyzeInBrowser, analyzeTiers as tiersInBrowser, cleanPrices, pricePerCheck } from '../../../apps/web/src/pricing';
-import { analyzeTiers } from '../src/index.js';
+import { analyzeTiers, mergePackages, VIRTUAL_CARE_MONTHLY_COST } from '../src/index.js';
 
 const db = loadTaxDatabase();
 const states = ['TX', 'NY', 'CA', 'PA', 'FL', 'OH'];
@@ -101,8 +101,10 @@ describe('tier margins', () => {
     expect(by.plus.marginPerEmployee).toBe(159 - 55);
     expect(by.standard.marginPerEmployee).toBe(117 - 55);
     expect(by.basic.marginPerEmployee).toBe(74 - 55);
-    expect(by.essential.marginPerEmployee).toBe(31 - 55);
-    expect(t.filter((r) => r.losesMoney).map((r) => r.id)).toEqual(['essential']);
+    // Essential carries virtual care only, so it no longer pays for MEC it cannot afford.
+    expect(by.essential.packageName).toBe('Virtual care only');
+    expect(by.essential.marginPerEmployee).toBe(31 - VIRTUAL_CARE_MONTHLY_COST);
+    expect(t.filter((r) => r.losesMoney).map((r) => r.id)).toEqual(31 < VIRTUAL_CARE_MONTHLY_COST ? ['essential'] : []);
     const tiersOnly = t.filter((r) => r.id !== 'total');
     expect(by.total.enrolled).toBe(tiersOnly.reduce((a, r) => a + r.enrolled, 0));
     expect(by.total.monthlyMargin).toBeCloseTo(tiersOnly.reduce((a, r) => a + r.monthlyMargin, 0), 2);
@@ -114,5 +116,22 @@ describe('tier margins', () => {
     expect([24, 26, 52].map((n) => pricePerCheck(117, n))).toEqual([58.5, 54, 27]);
     expect([24, 26, 52].map((n) => pricePerCheck(74, n))).toEqual([37, 34.15, 17.08]);
     expect([24, 26, 52].map((n) => pricePerCheck(31, n))).toEqual([15.5, 14.31, 7.15]);
+  });
+});
+
+describe('benefit packages', () => {
+  it('offers virtual care only next to MEC, and a saved proposal keeps its own costs while picking up new packages', () => {
+    const d = mergePackages();
+    expect(d.map((p) => p.id)).toEqual(['virtual', 'mec', 'standard', 'mec_plus']);
+    const saved = mergePackages([{ id: 'mec', name: 'MEC', monthlyCost: 60 }, { id: 'custom', name: 'Custom', monthlyCost: 10 }]);
+    expect(saved.find((p) => p.id === 'mec')!.monthlyCost).toBe(60);
+    expect(saved.map((p) => p.id)).toEqual(['virtual', 'mec', 'standard', 'mec_plus', 'custom']);
+  });
+
+  it('the full plan can be set to virtual care only, and its cost comes off the margin', () => {
+    const r = runProposal(rows, { year: 2027, benefitPackageId: 'virtual', benefitPackages: mergePackages().map((p) => (p.id === 'virtual' ? { ...p, monthlyCost: 12 } : p)) }, db);
+    expect(r.summary.benefitPackage.name).toBe('Virtual care only');
+    const row = r.summary.programs[0];
+    expect(row.monthlyMargin).toBeCloseTo(row.eligible * (row.price - 12) + row.partTimeEligible * (74 - 55), 2);
   });
 });

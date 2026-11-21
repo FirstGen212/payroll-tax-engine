@@ -250,6 +250,9 @@ export interface ProposalSettings {
   overrides: Record<string, EmployeeOverride>;
 }
 
+/** What the virtual-care-only package costs First Gen per enrollee per month. Placeholder until Evan confirms the number. */
+export const VIRTUAL_CARE_MONTHLY_COST = 0;
+
 export const DEFAULT_PROPOSAL_SETTINGS: ProposalSettings = {
   year: 2027,
   deductionPerCheck: 298.38,
@@ -258,6 +261,8 @@ export const DEFAULT_PROPOSAL_SETTINGS: ProposalSettings = {
   useRowDeduction: true,
   rowDeductionPer: 'check',
   benefitPackages: [
+    // Everyone gets virtual care. MEC is added for those whose savings can cover it.
+    { id: 'virtual', name: 'Virtual care only', monthlyCost: VIRTUAL_CARE_MONTHLY_COST },
     { id: 'mec', name: 'MEC', monthlyCost: 55 },
     { id: 'standard', name: 'Standard', monthlyCost: 65 },
     { id: 'mec_plus', name: 'MEC Plus', monthlyCost: 95 },
@@ -279,7 +284,7 @@ export const DEFAULT_PROPOSAL_SETTINGS: ProposalSettings = {
     { id: 'plus', name: 'Plus', deductionByFrequency: { monthly: 1293, semimonthly: 646.5, biweekly: 596.77, weekly: 298.38 }, monthlyPrice: 159, allotmentCutoff: 149, benefitPackageId: 'mec', fullTimeRules: true, enabled: true },
     { id: 'standard', name: 'Standard', deductionByFrequency: { monthly: 1040, semimonthly: 520, biweekly: 480, weekly: 240 }, monthlyPrice: 117, allotmentCutoff: 120, benefitPackageId: 'mec', fullTimeRules: false, enabled: true },
     { id: 'basic', name: 'Basic', deductionByFrequency: { monthly: 780, semimonthly: 390, biweekly: 360, weekly: 180 }, monthlyPrice: 74, allotmentCutoff: 74, benefitPackageId: 'mec', fullTimeRules: false, enabled: true },
-    { id: 'essential', name: 'Essential', deductionByFrequency: { monthly: 520, semimonthly: 260, biweekly: 240, weekly: 120 }, monthlyPrice: 31, allotmentCutoff: 60, benefitPackageId: 'mec', fullTimeRules: false, enabled: true },
+    { id: 'essential', name: 'Essential', deductionByFrequency: { monthly: 520, semimonthly: 260, biweekly: 240, weekly: 120 }, monthlyPrice: 31, allotmentCutoff: 60, benefitPackageId: 'virtual', fullTimeRules: false, enabled: true },
   ],
   hceCap: { enabled: true, payOver: 160000, maxTierId: 'standard' },
   voluntaryBenefits: [
@@ -1375,6 +1380,14 @@ function retirementSummary(employees: ProposalEmployeeResult[], s: ProposalSetti
   };
 }
 
+/** A saved list of benefit packages plus any default package it does not have yet, defaults first in their own order. */
+export function mergePackages(saved?: BenefitPackage[]): BenefitPackage[] {
+  const defaults = DEFAULT_PROPOSAL_SETTINGS.benefitPackages;
+  if (!saved?.length) return defaults.map((p) => ({ ...p }));
+  const byId = new Map(saved.map((p) => [p.id, p]));
+  return [...defaults.map((p) => ({ ...p, ...(byId.get(p.id) ?? {}) })), ...saved.filter((p) => !defaults.some((d) => d.id === p.id))];
+}
+
 export function runProposal(rows: CensusRow[], settings: Partial<ProposalSettings> = {}, db: TaxDatabase = loadTaxDatabase()): ProposalResult {
   const s: ProposalSettings = {
     ...DEFAULT_PROPOSAL_SETTINGS,
@@ -1386,6 +1399,8 @@ export function runProposal(rows: CensusRow[], settings: Partial<ProposalSetting
     pricingMode: settings.pricingMode === 'tiers' ? 'tiers' : 'standard',
     tiers: (settings.tiers?.length ? settings.tiers : DEFAULT_PROPOSAL_SETTINGS.tiers).map((t) => ({ ...t, deductionByFrequency: { ...(t.deductionByFrequency ?? {}) } })),
     hceCap: { ...DEFAULT_PROPOSAL_SETTINGS.hceCap, ...(settings.hceCap ?? {}) },
+    // Saved proposals keep their own package costs, and pick up packages added since (such as virtual care only).
+    benefitPackages: mergePackages(settings.benefitPackages),
     voluntaryBenefits: settings.voluntaryBenefits?.length ? settings.voluntaryBenefits : DEFAULT_PROPOSAL_SETTINGS.voluntaryBenefits,
     adminFee: { ...DEFAULT_PROPOSAL_SETTINGS.adminFee, ...(settings.adminFee ?? {}) },
     overrides: settings.overrides ?? {},

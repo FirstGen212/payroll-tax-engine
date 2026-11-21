@@ -40,6 +40,12 @@ function toBase64(file: File): Promise<string> {
   });
 }
 
+/** A saved proposal's packages plus any default package added since it was saved (such as virtual care only). */
+function withDefaultPackages(saved: any[] | undefined, defaults: any[] = []) {
+  if (!saved?.length) return structuredClone(defaults);
+  return [...defaults.map((d) => ({ ...d, ...(saved.find((p) => p.id === d.id) ?? {}) })), ...saved.filter((p) => !defaults.some((d) => d.id === p.id))];
+}
+
 export default function ProposalBuilder() {
   const { id } = useParams();
   const nav = useNavigate();
@@ -75,7 +81,7 @@ export default function ProposalBuilder() {
         setReportSettings(p.report_settings);
         setHeaders(p.headers); setRows(p.raw_rows); setMapping(p.mapping); setSheetName(p.sheet_name ?? '');
         setFile({ fileName: p.file_name, sheets: [] });
-        setSettings({ ...structuredClone(d.settings), ...p.settings, partTime: { ...d.settings.partTime, ...(p.settings.partTime ?? {}) } });
+        setSettings({ ...structuredClone(d.settings), ...p.settings, partTime: { ...d.settings.partTime, ...(p.settings.partTime ?? {}) }, benefitPackages: withDefaultPackages(p.settings.benefitPackages, d.settings.benefitPackages) });
         if (p.summary?.programs) setResult({ settings: p.settings, employees: p.results, summary: p.summary, unmatchedMunicipalities: p.summary?.unmatchedMunicipalities ?? [] });
       }).catch((e) => setErr(e.message));
     });
@@ -250,6 +256,8 @@ export default function ProposalBuilder() {
           <div style={{ marginTop: 12 }}>
             <label>Benefit package (preventative care tier applied to benefit cost)</label>
             <div className="seg" style={{ marginTop: 6 }}>{settings.benefitPackages.map((p: any) => <button key={p.id} className={settings.benefitPackageId === p.id ? 'on' : ''} onClick={() => setS({ benefitPackageId: p.id })}>{p.name} ({money(p.monthlyCost)})</button>)}</div>
+            <p className="small muted" style={{ margin: '8px 0 4px' }}>Every package includes virtual care. Package cost per enrollee per month, taken off the price for the margin:</p>
+            <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>{settings.benefitPackages.map((p: any, i: number) => <label key={p.id} className="small">{p.name}<input type="number" min={0} step="0.01" style={{ width: 96 }} value={p.monthlyCost} onChange={(e) => setS({ benefitPackages: settings.benefitPackages.map((q: any, j: number) => (j === i ? { ...q, monthlyCost: Math.max(0, num(e.target.value)) } : q)) })} /></label>)}</div>
             <div className="grid2" style={{ marginTop: 12 }}>
               <label>Monthly allotment threshold: minimum monthly allotment required ($)<input type="number" value={settings.allotmentThreshold} onChange={(e) => setS({ allotmentThreshold: num(e.target.value) })} /></label>
               <label>Low income threshold: annual gross at or below this is low income ($)<input type="number" value={settings.lowIncomeMax} onChange={(e) => setS({ lowIncomeMax: num(e.target.value) })} /></label>
