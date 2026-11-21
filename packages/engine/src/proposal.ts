@@ -349,6 +349,26 @@ export interface ProgramAnalysis {
   annualMargin: number;
 }
 
+/** What the margin analyzer needs from each employee result. */
+export type ProgramInput = Pick<ProposalEmployeeResult, 'passesNonSavingsRules' | 'eligibility'> & { monthly?: { allotment: number } };
+
+/**
+ * The margin analyzer: for each program price, how many employees would qualify at that price and what First Gen
+ * would earn. An employee counts when they pass every rule except the savings test and their allotment is at or above
+ * the price (and under the review line). Margin is the price less the benefit package's cost, per employee per month.
+ * The web app runs this same calculation in the browser to reprice instantly (apps/web/src/pricing.ts).
+ */
+export function analyzePrograms(employees: ProgramInput[], prices: number[], benefitMonthlyCost: number, needsReviewAllotment: number): ProgramAnalysis[] {
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  const partTime = employees.filter((e) => e.eligibility === 'PT Eligible').length;
+  return [...new Set(prices)].sort((a, b) => b - a).map((price) => {
+    const eligible = employees.filter((e) => e.passesNonSavingsRules && e.monthly && e.monthly.allotment >= price && e.monthly.allotment < needsReviewAllotment).length;
+    const revenue = eligible * price;
+    const cost = eligible * benefitMonthlyCost;
+    return { price, eligible, partTimeEligible: partTime, monthlyRevenue: r2(revenue), monthlyBenefitCost: r2(cost), monthlyMargin: r2(revenue - cost), marginPercent: revenue ? Math.round(((revenue - cost) / revenue) * 1000) / 1000 : 0, annualMargin: r2((revenue - cost) * 12) };
+  });
+}
+
 export interface ProposalSummary {
   rowsInFile: number;
   employees: number;
@@ -1051,15 +1071,8 @@ export function runProposal(rows: CensusRow[], settings: Partial<ProposalSetting
   const erPt = sum(pt.map((e) => e.partTime!.calc.monthly.employerTaxSavings * 12));
   const pkg = s.benefitPackages.find((p) => p.id === s.benefitPackageId) ?? s.benefitPackages[0];
   const withAllot = employees.filter((e) => e.monthly);
-  const prices = [...s.programPrices].sort((a, b) => b - a);
   const lowEdge = s.allotmentThreshold - 10;
-
-  const programs: ProgramAnalysis[] = prices.map((price) => {
-    const eligible = employees.filter((e) => e.passesNonSavingsRules && e.monthly && e.monthly.allotment >= price && e.monthly.allotment < s.needsReviewAllotment).length;
-    const revenue = eligible * price;
-    const cost = eligible * (pkg?.monthlyCost ?? 0);
-    return { price, eligible, partTimeEligible: pt.length, monthlyRevenue: r2(revenue), monthlyBenefitCost: r2(cost), monthlyMargin: r2(revenue - cost), marginPercent: revenue ? Math.round(((revenue - cost) / revenue) * 1000) / 1000 : 0, annualMargin: r2((revenue - cost) * 12) };
-  });
+  const programs = analyzePrograms(employees, s.programPrices, pkg?.monthlyCost ?? 0, s.needsReviewAllotment);
 
   const erTotal = r2((erFull + erPt) * rate);
   const freqCount = new Map<PayFrequency, number>();

@@ -15,6 +15,7 @@ import { seed } from './seed.js';
 import { proposalRoutes } from './proposals/routes.js';
 import { multiplesRoutes } from './proposals/multiples.js';
 import { registerAuth } from './auth.js';
+import { registerSecurityHeaders } from './security.js';
 
 const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' }, bodyLimit: 40 * 1024 * 1024 });
 // The web app is served from this same address (and through Vite's proxy in development), so other sites get no
@@ -22,22 +23,26 @@ const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' }, bodyLi
 // A saved proposal is about a megabyte of JSON and the app bundle a third of one: both shrink about tenfold.
 await app.register(compress, { threshold: 2048, encodings: ['br', 'gzip'], brotliOptions: { params: { 1: 4 } } });
 await app.register(cors, { origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',').map((o) => o.trim()) : false });
+registerSecurityHeaders(app);
 app.setErrorHandler((err, req, reply) => {
   const issues = (err as any).issues as { path: (string | number)[]; message: string }[] | undefined;
   // The database rejecting a malformed id or date is the caller's mistake, not a server fault.
   const pg = (err as any).code as string | undefined;
   const badInput = pg === '22P02' ? [404, 'Not found.'] as const : pg === '22007' || pg === '22008' ? [400, 'That date is not valid.'] as const : pg === '23503' ? [409, 'That record is used elsewhere or refers to something that does not exist.'] as const : undefined;
   if (badInput) return reply.code(badInput[0]).send({ error: badInput[1] });
+  if ((err as any).code === 'FST_ERR_CTP_BODY_TOO_LARGE') return reply.code(413).send({ error: 'That is more data than the server takes in one go. Split the file into smaller parts and try again.' });
   const status = issues ? 400 : (err as any).statusCode ?? 500;
+  const message = err instanceof Error ? err.message : String(err);
   if (status >= 500) req.log.error(err);
   // Input that fails a check is reported as a sentence per field, not as the validator's raw output.
-  const error = issues ? issues.slice(0, 5).map((i) => (i.path.length ? `${i.path.join('.')}: ${i.message}` : i.message)).join('. ') : status >= 500 ? 'Something went wrong on the server. Try again; if it keeps happening, tell an admin.' : err.message;
+  const error = issues ? issues.slice(0, 5).map((i) => (i.path.length ? `${i.path.join('.')}: ${i.message}` : i.message)).join('. ') : status >= 500 ? 'Something went wrong on the server. Try again; if it keeps happening, tell an admin.' : message;
   reply.code(status).send({ error, issues });
 });
 
 // Sign-in, permissions and the audit log (see auth.ts). APP_PASSWORD is the key that guards creating the first admin.
 await registerAuth(app);
 
+const notFound = (what: string) => Object.assign(new Error(`${what} not found.`), { statusCode: 404 });
 const iso = (d: unknown) => (d instanceof Date ? d.toISOString().slice(0, 10) : (d as string | null) ?? undefined);
 
 // ------------------------------------------------------------------ reference / research database
@@ -111,13 +116,16 @@ app.post('/api/clients', async (req) => {
 app.get('/api/clients/:id', async (req) => {
   const id = (req.params as any).id;
   const [client] = await q('select * from client where id=$1', [id]);
+  if (!client) throw notFound('Client');
   const locations = await q('select * from client_work_location where client_id=$1 order by label', [id]);
   const settings = await q('select * from client_tax_setting where client_id=$1 order by tax_key', [id]);
   return { ...client, locations, settings };
 });
 app.put('/api/clients/:id', async (req) => {
   const b = ClientBody.parse(req.body);
-  return (await q('update client set name=$2,fein=$3,home_state=$4,pay_frequency=$5,futa_exempt=$6,employee_count=$7,current_vendor=$8,withhold_resident_local=$9,notes=$10,retirement_system=$11,social_security_covered=$12 where id=$1 returning *', [(req.params as any).id, b.name, b.fein ?? null, b.homeState ?? null, b.payFrequency, b.futaExempt, b.employeeCount ?? null, b.currentVendor ?? null, b.withholdResidentLocal, b.notes ?? null, b.retirementSystem || null, b.socialSecurityCovered]))[0];
+  const [row] = await q('update client set name=$2,fein=$3,home_state=$4,pay_frequency=$5,futa_exempt=$6,employee_count=$7,current_vendor=$8,withhold_resident_local=$9,notes=$10,retirement_system=$11,social_security_covered=$12 where id=$1 returning *', [(req.params as any).id, b.name, b.fein ?? null, b.homeState ?? null, b.payFrequency, b.futaExempt, b.employeeCount ?? null, b.currentVendor ?? null, b.withholdResidentLocal, b.notes ?? null, b.retirementSystem || null, b.socialSecurityCovered]);
+  if (!row) throw notFound('Client');
+  return row;
 });
 app.post('/api/clients/:id/locations', async (req) => {
   const b = z.object({ label: z.string(), state: z.string(), localCodes: z.array(z.string()).default([]), address: z.string().nullish() }).parse(req.body);
@@ -182,6 +190,7 @@ app.post('/api/clients/:id/employees', async (req) => saveEmployee((req.params a
 app.get('/api/employees/:id', async (req) => {
   const id = (req.params as any).id;
   const [e] = await q('select * from employee where id=$1', [id]);
+  if (!e) throw notFound('Employee');
   const work = await q('select * from employee_work_allocation where employee_id=$1', [id]);
   const deductions = await q('select * from employee_recurring_deduction where employee_id=$1', [id]);
   const ytd = await q('select * from employee_ytd where employee_id=$1 order by year desc', [id]);
@@ -189,12 +198,14 @@ app.get('/api/employees/:id', async (req) => {
 });
 app.put('/api/employees/:id', async (req) => {
   const [e] = await q('select client_id from employee where id=$1', [(req.params as any).id]);
+  if (!e) throw notFound('Employee');
   return saveEmployee(e.client_id, EmployeeBody.parse(req.body), (req.params as any).id);
 });
 
 // ------------------------------------------------------------------ calculations
 async function buildInput(clientId: string, employeeId: string, line: { earnings: any[]; deductions?: any[]; replaceRecurring?: boolean }, checkDate: string, runType: PayInput['runType'], vendorId?: string): Promise<PayInput> {
   const [client] = await q('select * from client where id=$1', [clientId]);
+  if (!client) throw notFound('Client');
   const [e] = await q('select * from employee where id=$1 and client_id=$2', [employeeId, clientId]);
   if (!e) throw Object.assign(new Error(`Employee ${employeeId} not found for client`), { statusCode: 404 });
   const work = await q('select * from employee_work_allocation where employee_id=$1', [employeeId]);
@@ -243,14 +254,14 @@ const CalcBody = z.object({
   checkDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use a date like 2027-01-15'),
   payFrequency: z.enum(['daily', 'weekly', 'biweekly', 'semimonthly', 'monthly', 'quarterly', 'semiannual', 'annual']),
   employer: z.object({ id: z.string(), name: z.string() }).passthrough(),
-  employee: z.object({ id: z.string(), federalW4: z.object({}).passthrough(), residence: z.object({ state: z.string() }).passthrough(), work: z.array(z.object({ state: z.string(), percent: z.number() }).passthrough()).min(1) }).passthrough(),
+  employee: z.object({ id: z.string(), federalW4: z.object({ version: z.enum(['2020+', 'pre2020']).default('2020+'), filingStatus: z.enum(['single', 'mfj', 'hoh', 'mfs'], { message: 'Choose a federal filing status: single, mfj, hoh or mfs.' }) }).passthrough(), residence: z.object({ state: z.string() }).passthrough(), work: z.array(z.object({ state: z.string(), percent: z.number() }).passthrough()).min(1) }).passthrough(),
   earnings: z.array(z.object({ code: z.string(), amount: z.number() }).passthrough()),
 }).passthrough();
 app.post('/api/calculate', async (req) => calculatePay(CalcBody.parse(req.body) as unknown as PayInput, await getTaxDb()));
 
 const PayRunBody = z.object({
   checkDate: z.string(), runType: z.enum(['actual', 'mock', 'proposal']).default('mock'), vendorProfileId: z.string().nullish(), label: z.string().nullish(), save: z.boolean().default(true),
-  lines: z.array(z.object({ employeeId: z.string(), earnings: z.array(z.object({ code: z.string(), amount: z.number(), hours: z.number().optional(), rate: z.number().optional() })), deductions: z.array(z.any()).optional(), replaceRecurring: z.boolean().optional() })),
+  lines: z.array(z.object({ employeeId: z.string(), earnings: z.array(z.object({ code: z.string(), amount: z.number(), hours: z.number().optional(), rate: z.number().optional() })), deductions: z.array(z.any()).optional(), replaceRecurring: z.boolean().optional() })).max(2000, 'A pay run can have at most 2,000 lines.'),
 });
 
 app.post('/api/clients/:id/payruns', async (req) => {
@@ -278,14 +289,16 @@ app.get('/api/clients/:id/payruns', async (req) => q('select id, run_type, vendo
 app.get('/api/payruns/:id', async (req) => {
   const id = (req.params as any).id;
   const [run] = await q('select * from pay_run where id=$1', [id]);
+  if (!run) throw notFound('Pay run');
   const statements = await q(`select s.id, s.employee_id, e.first_name, e.last_name, s.result, s.gross, s.net from pay_statement s join employee e on e.id=s.employee_id where s.pay_run_id=$1 order by e.last_name`, [id]);
   return { ...run, statements };
 });
 
 /** Proposal / eligibility modeling: same employees and pay with a variant (e.g. add Section 125 plan). */
 app.post('/api/scenarios/compare', async (req) => {
-  const b = z.object({ base: z.array(z.any()), variant: z.array(z.any()) }).parse(req.body);
-  return compareScenarios(b.base as PayInput[], b.variant as PayInput[], await getTaxDb());
+  const list = z.array(CalcBody).max(500, 'Compare at most 500 checks at a time.');
+  const b = z.object({ base: list, variant: list }).parse(req.body);
+  return compareScenarios(b.base as unknown as PayInput[], b.variant as unknown as PayInput[], await getTaxDb());
 });
 
 // ------------------------------------------------------------------ vendor profiles
@@ -310,8 +323,11 @@ app.post('/api/vendor-profiles/:id/learn', async (req) => {
 const webDist = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'web', 'dist');
 if (existsSync(webDist)) {
   // Files under /assets carry a content hash in their name, so browsers can keep them for a year; the page itself is always re-checked.
-  await app.register(fastifyStatic, { root: webDist, cacheControl: false, setHeaders: (res, path) => { res.setHeader('cache-control', path.includes('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache'); } });
-  app.setNotFoundHandler((req, reply) => (req.url.startsWith('/api') ? reply.code(404).send({ error: 'not found' }) : reply.sendFile('index.html')));
+  await app.register(fastifyStatic, { root: webDist, cacheControl: false, setHeaders: (res, path) => { res.header('cache-control', path.includes('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache'); } });
+  // A missing file (an old hashed script after a deploy, a logo not uploaded yet) is a 404, not the app page: served as
+  // the page, a browser would try to run HTML as a script or show it as an image.
+  const isFile = (url: string) => /\.[a-z0-9]{1,8}$/i.test(url.split('?')[0]);
+  app.setNotFoundHandler((req, reply) => (req.url.startsWith('/api') || isFile(req.url) ? reply.code(404).send({ error: 'not found' }) : reply.sendFile('index.html')));
 }
 
 
