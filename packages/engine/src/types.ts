@@ -34,6 +34,8 @@ export interface StateW4 {
   electedPercent?: number;
   /** New Jersey NJ-W4 rate table letter. */
   njTable?: 'A' | 'B' | 'C' | 'D' | 'E';
+  /** Connecticut CT-W4 withholding code. */
+  ctCode?: 'A' | 'B' | 'C' | 'D' | 'F';
   /** Employee filed the reciprocity / nonresident exemption certificate for this (work) state. */
   reciprocityCertificate?: boolean;
 }
