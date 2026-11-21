@@ -4,13 +4,23 @@
 
 1. **Conventions.** Start from IRS by-the-book conventions, overlay the selected vendor profile (rounding, supplemental method, FICA true-up, percent-deduction base, extra-withholding timing).
 2. **Earnings.** Each earning code has taxability per wage basis (`FIT, FICA, MEDICARE, FUTA, SIT, SUI, SDI, LOCAL`), a supplemental flag and a cash flag (imputed income is taxable but not paid).
-3. **Deductions.** Pre-tax amounts are computed (flat, percent, or retirement-system rate) and capped by IRS limits with age 50+ and 60-63 catch-ups. Each deduction reduces specific wage bases, with state overrides (PA taxes deferrals, NJ taxes 403(b)/457/414(h), CA/NJ tax HSA, NY adds back 414(h)).
+3. **Deductions.** Pre-tax amounts are computed (flat, percent, or retirement-system rate) and capped by IRS limits with age 50+ and 60-63 catch-ups. Each deduction reduces specific wage bases, with state overrides (PA taxes deferrals, NJ taxes 403(b)/457/414(h), CA/NJ tax HSA, NY adds back 414(h)). Section 125 deductions take their state and local treatment from the audit table (see below); an override can be keyed by a local jurisdiction code (Philadelphia) as well as a state, and the local code wins.
 4. **Taxable wages** are computed per basis, and per state for state/local bases.
 5. **Federal.** FIT via Pub 15-T Worksheet 1A (tables derived from the year's brackets and standard deduction unless published tables are loaded), supplemental flat 22% / 37% over $1M; SS (wage base), Medicare, Additional Medicare over $200k; FUTA with credit reduction. Territory residents working in a territory skip FIT and get territory income tax.
 6. **States.** Work-state tax for each nonresident work state unless reciprocity applies; resident-state tax with credit for work-state tax. Allocations use the proportional method. Convenience-of-employer moves remote-for-convenience work to the employer's state. State programs (SUI, SDI, PFML...) apply to the unemployment (localized) state.
 7. **Locals.** PA Act 32 (higher of resident and work nonresident EIT), LST with low-income exemption, Indiana residence-county rule, resident-only taxes (NYC, Yonkers surcharge, MD counties, OH school districts), nonresident-only taxes, Ohio resident credit for work-city tax, employer-paid local taxes.
 8. **Garnishments** use disposable earnings (gross less employee taxes and mandatory retirement) and CCPA / AWG / levy limits, in priority order.
 9. **Net pay and employer cost**, YTD after the check (feed into the next one), warnings (including every line that used unverified/projected data).
+
+## Section 125 and state and local taxes
+
+`packages/tax-data/src/section125.ts` records, for every state and local tax the engine models, whether a Section 125 salary reduction lowers that tax's wages, with a status and sources like any rule. Its rows become the `stateOverrides` of the Section 125 deduction types (health premiums, FSAs, dependent care, HSA through the plan, and the proposal tool's `PROPOSED_125`). Researched November 21, 2026:
+
+- **Stays taxable:** New Jersey income tax (TB-39(R), N.J.S.A. 54A:6-24: every salary-reduction benefit, including premium conversion and FSAs), Philadelphia Wage Tax, Kentucky city and county occupational license taxes (KRS 67.750(2)(b)), Massachusetts PFML, NJ UI/TDI/FLI on dependent care. Alabama city occupational taxes are treated as taxable until a source is found.
+- **Lowers wages:** every other state income tax (Alabama's DOR says so; the rest follow federal wages), Pennsylvania income tax (health through a cafeteria plan, and dependent care since Act 34 of 2023), Pennsylvania Act 32 local EIT (follows PA income tax), Ohio municipal tax (ORC 718.01(R)(1)(a)), Michigan city tax, Kansas City and St. Louis earnings taxes, Wilmington, Maryland and Indiana local tax, NYC and Yonkers, and the Oregon statewide transit tax (now figured on state wages).
+- **Open:** `SECTION125_OPEN` lists what was checked without an answer (NY PFL, WA PFML, CA SDI, other paid leave programs). Those keep the earlier default.
+
+Each state and local tax line on a check with a Section 125 deduction says in its explanation whether the deduction lowered that tax and which source decided it. Proposals split employee savings by tax (`monthly.savingsBy`, `summary.employeeAnnualTaxSavingsBy`): federal income tax, Social Security and Medicare, state income tax, local taxes and state programs. The Tax database page shows the table for the selected state.
 
 ## Data flow
 

@@ -5,6 +5,7 @@
  * CA and NJ tax HSA contributions, NY adds back 414(h) pick-ups, etc.).
  */
 import type { BenefitLimit, DeductionType, EarningType, RetirementSystem, Taxability } from './types.js';
+import { section125BenefitOf, section125Overrides } from './section125.js';
 
 const ALL: Taxability = { FIT: true, FICA: true, MEDICARE: true, FUTA: true, SIT: true, SUI: true, SDI: true, LOCAL: true };
 const NONE: Taxability = { FIT: false, FICA: false, MEDICARE: false, FUTA: false, SIT: false, SUI: false, SDI: false, LOCAL: false };
@@ -75,19 +76,19 @@ const POST: Taxability = {};
 
 export const DEDUCTION_TYPES: DeductionType[] = [
   // Section 125 cafeteria plan first (reduces FICA, so it must run before retirement % calcs per most vendors)
-  d('MED_125', 'Medical (Section 125)', 'section125_health', S125, 10, { stateOverrides: { PA: { LOCAL: false } }, w2: '12-DD (with employer share)' }),
-  d('DEN_125', 'Dental (Section 125)', 'section125_health', S125, 11, { stateOverrides: { PA: { LOCAL: false } } }),
-  d('VIS_125', 'Vision (Section 125)', 'section125_health', S125, 12, { stateOverrides: { PA: { LOCAL: false } } }),
+  d('MED_125', 'Medical (Section 125)', 'section125_health', S125, 10, { w2: '12-DD (with employer share)' }),
+  d('DEN_125', 'Dental (Section 125)', 'section125_health', S125, 11),
+  d('VIS_125', 'Vision (Section 125)', 'section125_health', S125, 12),
   d('HOSP_IND_125', 'Hospital indemnity (pre-tax)', 'section125_health', S125, 13, { notes: 'Fixed-indemnity benefits paid without regard to expenses may be taxable when received if premiums were pre-tax.' }),
   d('ACC_125', 'Accident (pre-tax)', 'section125_health', S125, 14),
   d('CI_125', 'Critical illness (pre-tax)', 'section125_health', S125, 15),
-  d('OTHER_125', 'Other pre-tax (Section 125)', 'section125_health', S125, 17, { stateOverrides: { PA: { LOCAL: false } } }),
-  d('PROPOSED_125', 'Proposed pre-tax benefit (Section 125, proposal tool)', 'section125_health', S125, 18, { stateOverrides: { PA: { LOCAL: false } }, notes: 'The new pre-tax deduction modeled by the proposal tool. Treated like a Section 125 health premium: exempt from FIT, FICA, FUTA, and most state/SUI wages; PA local EIT still applies.' }),
+  d('OTHER_125', 'Other pre-tax (Section 125)', 'section125_health', S125, 17),
+  d('PROPOSED_125', 'Proposed pre-tax benefit (Section 125, proposal tool)', 'section125_health', S125, 18, { notes: 'The new pre-tax deduction modeled by the proposal tool. Treated like a Section 125 health premium: out of FIT, FICA and FUTA wages, and out of state and local wages wherever the Section 125 audit (section125.ts) says that tax follows it.' }),
   d('GTL_PRETAX_EE', 'Employee-paid group term life (≤$50k, pre-tax)', 'section125_health', S125, 16),
-  d('HSA_125', 'HSA (through cafeteria plan)', 'hsa', S125, 20, { limitKey: 'hsa', catchUpLimitKey: 'hsa_catchup', stateOverrides: { CA: { SIT: false, SDI: false }, NJ: { SIT: false }, PA: { LOCAL: false } }, w2: '12-W' }),
+  d('HSA_125', 'HSA (through cafeteria plan)', 'hsa', S125, 20, { limitKey: 'hsa', catchUpLimitKey: 'hsa_catchup', stateOverrides: { CA: { SIT: false, SDI: false }, NJ: { SIT: false } }, w2: '12-W' }),
   d('FSA_HEALTH', 'Health FSA', 'fsa', S125, 21, { limitKey: 'fsa_health' }),
   d('FSA_LTD', 'Limited-purpose FSA', 'fsa', S125, 22, { limitKey: 'fsa_health' }),
-  d('DCAP', 'Dependent care FSA', 'dependent_care', { FIT: true, FICA: true, MEDICARE: true, FUTA: true, SIT: true, SUI: true, SDI: true, LOCAL: true }, 23, { limitKey: 'dcap', stateOverrides: { PA: { SIT: false, LOCAL: false } }, w2: '10' }),
+  d('DCAP', 'Dependent care FSA', 'dependent_care', { FIT: true, FICA: true, MEDICARE: true, FUTA: true, SIT: true, SUI: true, SDI: true, LOCAL: true }, 23, { limitKey: 'dcap', w2: '10' }),
   d('TRANSIT', 'Commuter transit (132(f))', 'commuter', { FIT: true, FICA: true, MEDICARE: true, FUTA: true, SIT: true, SUI: true, SDI: true, LOCAL: true }, 24, { limitKey: 'transit' }),
   d('PARKING', 'Qualified parking (132(f))', 'commuter', { FIT: true, FICA: true, MEDICARE: true, FUTA: true, SIT: true, SUI: true, SDI: true, LOCAL: true }, 25, { limitKey: 'parking' }),
   // Retirement deferrals
@@ -129,6 +130,17 @@ export const DEDUCTION_TYPES: DeductionType[] = [
   d('ER_HEALTH', 'Employer health premium', 'employer_contribution', POST, 102, { employerPaid: true, w2: '12-DD' }),
   d('ER_PENSION', 'Employer pension / public plan contribution', 'employer_contribution', POST, 103, { employerPaid: true }),
 ];
+
+// Section 125 state and local treatment comes from the audit table; a deduction's own overrides (CA and NJ tax HSA contributions) win.
+for (const t of DEDUCTION_TYPES) {
+  const benefit = section125BenefitOf(t.category);
+  if (!benefit) continue;
+  const audit = section125Overrides(benefit);
+  const own = t.stateOverrides ?? {};
+  const merged: Record<string, Taxability> = { ...audit };
+  for (const [k, v] of Object.entries(own)) merged[k] = { ...(merged[k] ?? {}), ...v };
+  t.stateOverrides = merged;
+}
 
 const L = (key: string, name: string, year: number, amount: number, status: BenefitLimit['status'], sources: string[], notes?: string): BenefitLimit => ({ key, name, year, amount, status, sources, notes });
 

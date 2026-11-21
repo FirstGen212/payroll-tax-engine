@@ -9,6 +9,7 @@ export * from './federal.js';
 export * from './states.js';
 export * from './locals.js';
 export * from './benefits.js';
+export * from './section125.js';
 export * from './reciprocity.js';
 export * from './vendors.js';
 
