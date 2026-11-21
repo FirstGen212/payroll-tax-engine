@@ -7,8 +7,8 @@
  * the new deduction), so wage bases (Social Security, FUTA, SUI) are respected,
  * then applies eligibility rules and pricing tiers.
  */
-import { coveredYears, loadTaxDatabase } from '@pte/tax-data';
-import type { TaxDatabase, VendorConventions } from '@pte/tax-data';
+import { coveredYears, loadTaxDatabase, RETIREMENT_SYSTEMS } from '@pte/tax-data';
+import type { RetirementSystem, TaxDatabase, VendorConventions } from '@pte/tax-data';
 import { runSeries } from './payrun.js';
 import { cents, PERIODS_PER_YEAR, WEEKS_PER_PERIOD } from './money.js';
 import type { PayFrequency } from './money.js';
@@ -56,6 +56,10 @@ export interface CensusRow {
   /** 401(k) as a decimal share of gross (used when no dollar amount is given). */
   retirementPercent?: number;
   postTaxMonthly?: number;
+  /** Public retirement system member contribution per check (e.g. the TRS 8.25% column of a school district register). */
+  retirementSystemContribution?: number;
+  /** From the file: is Social Security (OASDI) withheld from this person today? Public employers only. */
+  socialSecurityPaid?: boolean | null;
   /** Per-employee proposed deduction (e.g. the sheet's "First Gen Deduction Amount"); overrides the tier amount. */
   proposedDeduction?: number;
   tips?: number;
@@ -97,6 +101,21 @@ export interface EmployeeOverride {
   note?: string;
 }
 
+/** How a public employer's retirement system and Social Security coverage are modeled (used when `retirementSystem` is set). */
+export interface PublicEmployerSettings {
+  /** The employer has a Section 218 agreement, so members pay Social Security. Most Texas school districts do not. */
+  socialSecurityCovered: boolean;
+  /** When the employer is not covered, a row whose file shows Social Security withheld is still treated as covered. */
+  detectSocialSecurity: boolean;
+  /** Use the file's retirement system column when it has an amount; otherwise the member rate x gross pay. */
+  useFileContribution: boolean;
+  /**
+   * The system counts Section 125 salary reductions as covered pay (TRS does, 34 TAC 25.21(c)(5), when the plan meets 25.22).
+   * When false, the member contribution falls with the new deduction, which lowers the pension too.
+   */
+  cafeteriaReductionsCovered: boolean;
+}
+
 export interface ProposalSettings {
   /** Plan year: the engine runs every check date in this year. */
   year: number;
@@ -128,8 +147,11 @@ export interface ProposalSettings {
   /** Count an employee once when the same company + ID + name appears on several rows. */
   dedupe: boolean;
   partTime: PartTimePlan;
-  /** Employer savings basis: Social Security + Medicare only (7.65%), or all employer taxes (adds FUTA, SUI, etc.). */
+  /** Employer savings basis: Social Security + Medicare only (7.65%, or Medicare 1.45% where Social Security does not apply), or all employer taxes (adds FUTA, SUI, etc.). */
   employerSavingsBasis: 'fica' | 'all';
+  /** Payroll model: a public retirement system the employer reports to (e.g. 'TX_TRS' for a Texas school district). Empty = private employer. */
+  retirementSystem?: string;
+  publicEmployer: PublicEmployerSettings;
   /** Share of the deduction returned to the employee each check as a tax-free benefit payment (for the take-home view). */
   benefitPaybackPercent: number;
   /** EBITDA multiple for the valuation-increase estimate. */
@@ -181,6 +203,8 @@ export const DEFAULT_PROPOSAL_SETTINGS: ProposalSettings = {
   dedupe: false,
   partTime: { enabled: true, deductionPerCheck: 180, allotmentThreshold: 74, maxHoursPerWeek: 29, maxAnnualGross: 20000 },
   employerSavingsBasis: 'fica',
+  retirementSystem: '',
+  publicEmployer: { socialSecurityCovered: false, detectSocialSecurity: true, useFileContribution: true, cafeteriaReductionsCovered: true },
   benefitPaybackPercent: 1,
   ebitdaMultiple: 5.2,
   industry: '',
@@ -267,6 +291,8 @@ export interface PlanCalc {
     /** Take-home change per month including the benefit payment back. */
     employeeNetGain: number;
   };
+  /** Public retirement system contributions per year, before and after (public employers only). */
+  retirement?: { system: string; memberBefore: number; memberAfter: number; employerBefore: number; employerAfter: number };
 }
 
 /** Which rule decided an employee's status (the first one that failed, in the order the rules run). */
@@ -347,6 +373,22 @@ export interface ProposalSummary {
   projectedEnrolled: number;
   participationRate: number;
   overridesApplied: number;
+  /** The public retirement model, when the proposal uses one. */
+  retirement?: {
+    system: string;
+    name: string;
+    memberRate: number;
+    employerRate: number;
+    /** Social Security: nobody, everybody, or only the rows the file shows paying it. */
+    socialSecurity: 'none' | 'all' | 'some';
+    socialSecurityEmployees: number;
+    cafeteriaReductionsCovered: boolean;
+    /** Member contributions of eligible employees per year, before and after the plan. */
+    memberAnnual: { before: number; after: number };
+    employerAnnual: { before: number; after: number };
+    status: string;
+    sources: string[];
+  };
   byCompany: { company: string; employees: number; eligible: number; monthlySavings: number; employerAnnualSavings: number }[];
 }
 
@@ -448,6 +490,22 @@ function totalsOf(results: PayResult[], deductionCode: string, benefitPerCheck: 
 }
 
 export const PROPOSAL_DEDUCTION_CODE = 'PROPOSED_125';
+/** Deduction code for a public retirement system member contribution (414(h)(2) pick-up). */
+export const PICKUP_CODE = '401A_PICKUP';
+
+/** The public retirement system a proposal is modeled on, if any. */
+export function retirementSystemOf(s: Pick<ProposalSettings, 'retirementSystem'>): RetirementSystem | undefined {
+  return s.retirementSystem ? RETIREMENT_SYSTEMS.find((r) => r.code === s.retirementSystem) : undefined;
+}
+
+/** Is this row covered by Social Security under the proposal's payroll model? */
+export function socialSecurityCoveredFor(row: CensusRow, s: ProposalSettings): boolean {
+  if (!retirementSystemOf(s)) return true;
+  return s.publicEmployer.socialSecurityCovered || (s.publicEmployer.detectSocialSecurity && row.socialSecurityPaid === true);
+}
+
+/** Employer rate on covered pay (employer contribution plus employer-paid extras such as TRS-Care). */
+const employerRetirementRate = (rs: RetirementSystem) => (rs.employerRate ?? 0) + (rs.otherContributions ?? []).filter((c) => c.payer === 'employer').reduce((a, c) => a + c.rate, 0);
 
 /** Turn a census row into an engine pay input (without the new deduction). */
 export function payInputFromRow(row: CensusRow, freq: PayFrequency, grossPerCheck: number, s: ProposalSettings, otherComp = 0): { input: PayInput; notes: string[] } {
@@ -487,6 +545,20 @@ export function payInputFromRow(row: CensusRow, freq: PayFrequency, grossPerChec
   else if (row.retirementPercent && row.retirementPercent > 0 && row.retirementPercent < 1) deductions.push({ code: '401K', percent: row.retirementPercent });
   if (row.postTaxMonthly) deductions.push({ code: 'OTHER_POST', amount: perCheck(row.postTaxMonthly) });
 
+  // Public employer: the member contribution is a fixed share of pay before any Section 125 reduction, so it is
+  // entered as an amount (a percent line would follow the vendor's percent base, which may net out Section 125).
+  const rs = retirementSystemOf(s);
+  const ssCovered = socialSecurityCoveredFor(row, s);
+  if (rs) {
+    const computed = r2((grossPerCheck + otherComp) * rs.memberRate);
+    const fromFile = s.publicEmployer.useFileContribution && row.retirementSystemContribution !== undefined && row.retirementSystemContribution > 0 ? r2(row.retirementSystemContribution) : undefined;
+    deductions.push({ code: PICKUP_CODE, amount: fromFile ?? computed });
+    if (fromFile !== undefined && Math.abs(fromFile - computed) > Math.max(1, computed * 0.1)) {
+      notes.push(`${rs.code.replace('TX_', '')} contribution in the file (${usd(fromFile)}) differs from ${(rs.memberRate * 100).toFixed(2)}% of gross (${usd(computed)}); the file's amount is used.`);
+    }
+    if (!s.publicEmployer.socialSecurityCovered && ssCovered) notes.push('The file shows Social Security withheld for this person, so Social Security is included (likely a position covered under a Section 218 agreement).');
+  }
+
   const input: PayInput = {
     checkDate: `${s.year}-01-01`,
     payFrequency: freq,
@@ -496,7 +568,8 @@ export function payInputFromRow(row: CensusRow, freq: PayFrequency, grossPerChec
       name: s.employer.name ?? row.company ?? 'Proposal',
       homeState: s.employer.homeState ?? workState,
       suiRates: s.employer.suiRates,
-      futaExempt: s.employer.futaExempt,
+      // Governments are FUTA-exempt (IRC 3306(c)(7)).
+      futaExempt: s.employer.futaExempt ?? (rs ? true : undefined),
     },
     employee: {
       id: row.employeeId ?? String(row.rowNumber ?? ''),
@@ -505,6 +578,7 @@ export function payInputFromRow(row: CensusRow, freq: PayFrequency, grossPerChec
       federalW4,
       stateW4: { [workState]: sw, ...(resState !== workState ? { [resState]: sw } : {}) },
       residence: { state: resState, localCodes: resState === workState ? row.localCodes : undefined },
+      ...(rs ? { socialSecurityCovered: ssCovered, medicareCovered: true } : {}),
       work: [{ state: workState, percent: 1, localCodes: row.localCodes }],
     },
     earnings,
@@ -522,7 +596,11 @@ function planCalc(input: PayInput, freq: PayFrequency, grossPerCheck: number, de
   const periods = PERIODS_PER_YEAR[freq];
   const benefitPerCheck = r2(dedPerCheck * s.benefitPaybackPercent);
   const dates = checkDatesFor(s.year, freq);
-  const withDed: PayInput = { ...input, deductions: [...(input.deductions ?? []), { code: PROPOSAL_DEDUCTION_CODE, amount: dedPerCheck }] };
+  const rs = retirementSystemOf(s);
+  // If the system does not count Section 125 reductions as pay, the member contribution falls with the deduction.
+  const shrink = rs && !s.publicEmployer.cafeteriaReductionsCovered ? r2(dedPerCheck * rs.memberRate) : 0;
+  const baseDeds = (input.deductions ?? []).map((d) => (shrink && d.code === PICKUP_CODE ? { ...d, amount: Math.max(0, r2((d.amount ?? 0) - shrink)) } : d));
+  const withDed: PayInput = { ...input, deductions: [...baseDeds, { code: PROPOSAL_DEDUCTION_CODE, amount: dedPerCheck }] };
   const before = runSeries(input, dates, db);
   const after = runSeries(withDed, dates, db);
   const aB = totalsOf(before, PROPOSAL_DEDUCTION_CODE, 0);
@@ -554,8 +632,21 @@ function planCalc(input: PayInput, freq: PayFrequency, grossPerCheck: number, de
       allotment: r2(eeTaxSav * s.allotmentBuffer),
       employeeNetGain: r2((aA.netPay - aB.netPay) / 12),
     },
+    ...(rs ? { retirement: retirementTotals(rs, before, after, s) } : {}),
   };
   void periods; void grossPerCheck;
+}
+
+/** Member and employer retirement contributions per year, before and after the new deduction. */
+function retirementTotals(rs: RetirementSystem, before: PayResult[], after: PayResult[], s: ProposalSettings): NonNullable<PlanCalc['retirement']> {
+  const member = (rs2: PayResult[]) => r2(rs2.reduce((a, r) => a + r.deductions.filter((d) => d.code === PICKUP_CODE).reduce((x, d) => x + d.amount, 0), 0));
+  const memberBefore = member(before);
+  const memberAfter = member(after);
+  // Employer contributions run on the same covered pay as the member's.
+  const er = employerRetirementRate(rs);
+  const employerBefore = r2((memberBefore / rs.memberRate) * er);
+  const employerAfter = s.publicEmployer.cafeteriaReductionsCovered ? employerBefore : r2((memberAfter / rs.memberRate) * er);
+  return { system: rs.code, memberBefore, memberAfter, employerBefore, employerAfter };
 }
 
 function unverifiedLines(input: PayInput, s: ProposalSettings, db: TaxDatabase): string[] {
@@ -820,7 +911,7 @@ function savingsReason(res: ProposalEmployeeResult, c: EvalContext, s: ProposalS
   const noSit = hasSit ? '' : ` ${state} has no state income tax, so nothing is saved there either.`;
 
   if (row.federalTaxPaid === false) {
-    return `${head} ${rate} The payroll file shows no federal income tax withheld for them today, so the plan can mostly reduce only Social Security and Medicare tax.${noSit}`;
+    return `${head} ${rate} The payroll file shows no federal income tax withheld for them today, so the plan can mostly reduce only ${ficaWords(row, s)}.${noSit}`;
   }
   const st = parseFederalStatus(row.federalFilingStatus) ?? 'single';
   const credits = row.dependentCredits && row.dependentCredits > 0 ? row.dependentCredits : 0;
@@ -835,11 +926,14 @@ function savingsReason(res: ProposalEmployeeResult, c: EvalContext, s: ProposalS
   else if (c.existing > 0 && would(noPretax)) why = `they already have ${usd(c.existing)} per check in other deductions, which lowers the pay that is taxed`;
 
   let fed: string;
-  if (before.fit <= 0) fed = `No federal income tax is withheld from their check today, because ${why || 'their pay is under the level where federal income tax starts'}. That leaves only Social Security and Medicare tax for the plan to reduce.`;
+  if (before.fit <= 0) fed = `No federal income tax is withheld from their check today, because ${why || 'their pay is under the level where federal income tax starts'}. That leaves only ${ficaWords(row, s)} for the plan to reduce.`;
   else if (after.fit <= 0) fed = `Only ${usd(before.fit)} of federal income tax is withheld from each check, because ${why || 'their pay is close to the level where federal income tax starts'}, so there is little for the plan to reduce.`;
   else fed = `Federal income tax is withheld from their check at a low rate, because ${why || 'of the tax bracket their pay falls in'}.`;
   return `${head} ${rate} ${fed}${noSit}`;
 }
+
+/** The payroll taxes a pre-tax deduction reduces besides income tax: no Social Security for most public school staff. */
+const ficaWords = (row: CensusRow, s: ProposalSettings) => (socialSecurityCoveredFor(row, s) ? 'Social Security and Medicare tax' : 'Medicare tax (their employer does not take out Social Security)');
 
 /** Hours that do not fit the pay (a handful of hours for a full check) usually mean the file is wrong, not the employee. */
 function oddHours(res: ProposalEmployeeResult, c: EvalContext): string[] {
@@ -895,12 +989,38 @@ function explainEmployee(res: ProposalEmployeeResult, s: ProposalSettings, db: T
   }
 }
 
+/** The public retirement model in the summary: who pays Social Security and what happens to contributions. */
+function retirementSummary(employees: ProposalEmployeeResult[], s: ProposalSettings, rate: number): Pick<ProposalSummary, 'retirement'> {
+  const rs = retirementSystemOf(s);
+  if (!rs) return {};
+  const calced = employees.filter((e) => e.monthly);
+  const ssCount = calced.filter((e) => socialSecurityCoveredFor(e.row, s)).length;
+  const enrolled = employees.map((e) => (e.eligibility === 'Eligible' ? e.retirement : e.eligibility === 'PT Eligible' ? e.partTime?.calc.retirement : undefined)).filter((x): x is NonNullable<PlanCalc['retirement']> => !!x);
+  const tot = (k: keyof Omit<NonNullable<PlanCalc['retirement']>, 'system'>) => r2(enrolled.reduce((a, x) => a + x[k], 0) * rate);
+  return {
+    retirement: {
+      system: rs.code,
+      name: rs.name,
+      memberRate: rs.memberRate,
+      employerRate: employerRetirementRate(rs),
+      socialSecurity: s.publicEmployer.socialSecurityCovered || (calced.length > 0 && ssCount === calced.length) ? 'all' : ssCount ? 'some' : 'none',
+      socialSecurityEmployees: s.publicEmployer.socialSecurityCovered ? calced.length : ssCount,
+      cafeteriaReductionsCovered: s.publicEmployer.cafeteriaReductionsCovered,
+      memberAnnual: { before: tot('memberBefore'), after: tot('memberAfter') },
+      employerAnnual: { before: tot('employerBefore'), after: tot('employerAfter') },
+      status: rs.status,
+      sources: rs.sources,
+    },
+  };
+}
+
 export function runProposal(rows: CensusRow[], settings: Partial<ProposalSettings> = {}, db: TaxDatabase = loadTaxDatabase()): ProposalResult {
   const s: ProposalSettings = {
     ...DEFAULT_PROPOSAL_SETTINGS,
     ...settings,
     partTime: { ...DEFAULT_PROPOSAL_SETTINGS.partTime, ...(settings.partTime ?? {}) },
     employer: { ...DEFAULT_PROPOSAL_SETTINGS.employer, ...(settings.employer ?? {}) },
+    publicEmployer: { ...DEFAULT_PROPOSAL_SETTINGS.publicEmployer, ...(settings.publicEmployer ?? {}) },
     overrides: settings.overrides ?? {},
     participationRate: settings.participationRate ?? DEFAULT_PROPOSAL_SETTINGS.participationRate,
   };
@@ -983,6 +1103,7 @@ export function runProposal(rows: CensusRow[], settings: Partial<ProposalSetting
       projectedEnrolled: Math.round((full.length + pt.length) * rate),
       participationRate: rate,
       overridesApplied: employees.filter((e) => e.override).length,
+      ...(retirementSummary(employees, s, rate)),
       byCompany: [...companies.values()].map((c) => ({ ...c, monthlySavings: r2(c.monthlySavings), employerAnnualSavings: r2(c.employerAnnualSavings) })).sort((a, b) => b.employerAnnualSavings - a.employerAnnualSavings),
     },
   };
@@ -1020,6 +1141,8 @@ export const CENSUS_COLUMN_ALIASES: Record<keyof CensusRow, string[]> = {
   retirementMonthly: ['pretax monthly deduction 401k ira amount', '401k amount', '401k monthly', 'retirement monthly'],
   retirementPercent: ['if percent 401k', '401k percent', '401k %'],
   postTaxMonthly: ['posttax', 'post-tax', 'post tax monthly', 'after tax deductions'],
+  retirementSystemContribution: ['trs member contribution', 'trs contribution', 'trs deduction', 'trs ee', 'trs employee', 'trs member', 'trs', 'teacher retirement', 'retirement system contribution', 'pension contribution'],
+  socialSecurityPaid: ['social security tax', 'social security ee', 'social security', 'oasdi', 'ss tax', 'fica ss', 'soc sec'],
   proposedDeduction: ['first gen deduction amount', 'proposed deduction', 'new deduction', 'deduction amount'],
   tips: ['tips'],
   pto: ['pto'],
@@ -1054,8 +1177,8 @@ export function autoMapColumns(headers: string[]): Partial<Record<keyof CensusRo
   return out;
 }
 
-const NUMERIC: (keyof CensusRow)[] = ['grossPay', 'otherComp', 'periodsPerYear', 'hoursPerPeriod', 'hourlyRate', 'dependentAllowances', 'dependentCredits', 'additionalFit', 'stateDependents', 'additionalSit', 'healthMonthly', 'otherPretaxMonthly', 'retirementMonthly', 'retirementPercent', 'postTaxMonthly', 'proposedDeduction', 'tips', 'pto', 'reimbursements', 'confidence'];
-const BOOL: (keyof CensusRow)[] = ['federalTaxPaid', 'stateTaxPaid'];
+const NUMERIC: (keyof CensusRow)[] = ['grossPay', 'otherComp', 'periodsPerYear', 'hoursPerPeriod', 'hourlyRate', 'dependentAllowances', 'dependentCredits', 'additionalFit', 'stateDependents', 'additionalSit', 'healthMonthly', 'otherPretaxMonthly', 'retirementMonthly', 'retirementPercent', 'postTaxMonthly', 'retirementSystemContribution', 'proposedDeduction', 'tips', 'pto', 'reimbursements', 'confidence'];
+const BOOL: (keyof CensusRow)[] = ['federalTaxPaid', 'stateTaxPaid', 'socialSecurityPaid'];
 
 function toNumber(v: unknown): number | undefined {
   if (v === null || v === undefined || v === '') return undefined;

@@ -179,7 +179,10 @@ export function buildSnapshot(p: { name: string; company?: string | null; file_n
       .sort((a, b) => TONE_ORDER[a.tone] - TONE_ORDER[b.tone] || a.name.localeCompare(b.name)),
     showEmployees: rs.showEmployees,
     employeeColumns: rs.employeeColumns,
-    showValuation: rs.showValuation,
+    // A public employer (school district) has no EBITDA, so a valuation figure would mean nothing to them.
+    showValuation: rs.showValuation && !s.retirement,
+    /** Public employer: which retirement system, and whether savings include Social Security. */
+    publicRetirement: s.retirement ? { name: s.retirement.name, socialSecurity: s.retirement.socialSecurity, cafeteriaReductionsCovered: s.retirement.cafeteriaReductionsCovered } : null,
     steps: rs.steps,
     ctaHeading: rs.ctaHeading,
     ctaText: rs.ctaText,

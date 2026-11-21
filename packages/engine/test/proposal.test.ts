@@ -212,3 +212,61 @@ describe('proposal tool', () => {
     expect(() => runProposal([base], { ...std, year: 2031 }, db)).toThrow(/outside the tax data on file/);
   });
 });
+
+describe('Texas TRS payroll model', () => {
+  const trs = { ...std, allotmentThreshold: 50, retirementSystem: 'TX_TRS' };
+
+  it('district without Social Security: savings are income tax + Medicare only, TRS stays the same', () => {
+    const r = runProposal([base], trs, db);
+    const e = r.employees[0];
+    // 8.25% TRS pick-up on the full $1,000, before and after the Section 125 deduction
+    const pickup = (x: typeof e.check) => x!.before.otherDeductions;
+    expect(pickup(e.check)).toBeCloseTo(82.5, 2);
+    expect(e.check!.after.otherDeductions).toBeCloseTo(82.5, 2);
+    // No Social Security either way; Medicare 1.45% x 200 = 2.90 and FIT 12% x 200 = 24.00 per check
+    expect(e.check!.before.fica).toBeCloseTo(1000 * 0.0145, 2);
+    expect(e.perPeriod!.taxBefore - e.perPeriod!.taxAfter).toBeCloseTo(26.9, 2);
+    expect(e.monthly!.employerTaxSavings).toBeCloseTo((2.9 * 52) / 12, 1);
+    expect(e.retirement).toMatchObject({ system: 'TX_TRS', memberBefore: 4290, memberAfter: 4290 });
+    expect(e.retirement!.employerBefore).toBeCloseTo(1000 * 52 * 0.0275, 0);
+    expect(e.retirement!.employerAfter).toBe(e.retirement!.employerBefore);
+    expect(r.summary.retirement).toMatchObject({ system: 'TX_TRS', socialSecurity: 'none', memberRate: 0.0825 });
+    expect(r.summary.employerAnnualSavings.total).toBeCloseTo(2.9 * 52, 1);
+  });
+
+  it('district with a Section 218 agreement pays Social Security too', () => {
+    const e = runProposal([base], { ...trs, publicEmployer: { socialSecurityCovered: true } as any }, db).employees[0];
+    expect(e.perPeriod!.taxBefore - e.perPeriod!.taxAfter).toBeCloseTo(39.3, 2);
+    expect(e.monthly!.employerTaxSavings).toBeCloseTo((15.3 * 52) / 12, 1);
+  });
+
+  it('a row the file shows paying Social Security is treated as covered', () => {
+    const r = runProposal([{ ...base, employeeId: 'x' }, { ...base, employeeId: 'y', socialSecurityPaid: true }], trs, db);
+    expect(r.employees[0].perPeriod!.taxBefore - r.employees[0].perPeriod!.taxAfter).toBeCloseTo(26.9, 2);
+    expect(r.employees[1].perPeriod!.taxBefore - r.employees[1].perPeriod!.taxAfter).toBeCloseTo(39.3, 2);
+    expect(r.employees[1].flags.join(' ')).toMatch(/Section 218/);
+    expect(r.summary.retirement).toMatchObject({ socialSecurity: 'some', socialSecurityEmployees: 1 });
+  });
+
+  it('uses the file TRS amount when present, and can model a plan TRS does not count', () => {
+    const e = runProposal([{ ...base, retirementSystemContribution: 82.5 }], trs, db).employees[0];
+    expect(e.check!.before.otherDeductions).toBeCloseTo(82.5, 2);
+    const off = runProposal([base], { ...trs, publicEmployer: { cafeteriaReductionsCovered: false } as any }, db).employees[0];
+    expect(off.retirement!.memberAfter).toBeCloseTo((82.5 - 16.5) * 52, 1);
+    expect(off.retirement!.employerAfter).toBeLessThan(off.retirement!.employerBefore);
+  });
+
+  it('explains a no-Social-Security shortfall in plain words', () => {
+    const e = runProposal([{ ...base, grossPay: 600, federalTaxPaid: false }], { ...trs, allotmentThreshold: 149, lowIncomeMax: 0, partTime: { enabled: false } as any }, db).employees[0];
+    expect(e.eligibility).toMatch(/Insufficient Savings/);
+    expect(e.explanation!.reason).toMatch(/Medicare tax \(their employer does not take out Social Security\)/);
+  });
+
+  it('maps TRS and Social Security columns from a district register', () => {
+    const m = autoMapColumns(['Employee ID', 'First Name', 'Last Name', 'Gross Pay', 'TRS', 'Medicare', 'Social Security']);
+    expect(m.retirementSystemContribution).toBe('TRS');
+    expect(m.socialSecurityPaid).toBe('Social Security');
+    const rows = rowsFromSheet([{ 'Employee ID': '1', 'Gross Pay': '1,000', TRS: '82.50', 'Social Security': '0' }], m);
+    expect(rows[0]).toMatchObject({ retirementSystemContribution: 82.5, socialSecurityPaid: false });
+  });
+});

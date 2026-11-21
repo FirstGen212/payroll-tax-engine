@@ -374,6 +374,12 @@ export interface RetirementSystem {
   pickup414h: boolean;
   /** Typical Social Security coverage for members (many TX districts are non-Section 218). */
   socialSecurityTypicallyCovered: boolean | 'varies';
+  /** Other contributions on the same compensation, by who pays them (shown for context; they do not change with a Section 125 plan when salary reductions count as compensation). */
+  otherContributions?: { key: string; label: string; payer: 'member' | 'employer' | 'state'; rate: number }[];
+  /** Section 125 salary reductions count as covered compensation, so a cafeteria plan does not lower contributions or the pension. */
+  cafeteriaReductionsCovered?: boolean;
+  /** Fiscal year the rates apply to (e.g. 'FY2027: Sept 1, 2026 to Aug 31, 2027'). */
+  rateYear?: string;
   effectiveFrom: string;
   status: VerificationStatus;
   sources: string[];

@@ -101,12 +101,12 @@ app.get('/api/coverage', async () => {
 });
 
 // ------------------------------------------------------------------ clients
-const ClientBody = z.object({ name: z.string(), fein: z.string().nullish(), homeState: z.string().nullish(), payFrequency: z.string().default('biweekly'), futaExempt: z.boolean().default(false), employeeCount: z.number().int().optional(), currentVendor: z.string().nullish(), withholdResidentLocal: z.boolean().default(true), notes: z.string().nullish() });
+const ClientBody = z.object({ name: z.string(), fein: z.string().nullish(), homeState: z.string().nullish(), payFrequency: z.string().default('biweekly'), futaExempt: z.boolean().default(false), employeeCount: z.number().int().optional(), currentVendor: z.string().nullish(), withholdResidentLocal: z.boolean().default(true), notes: z.string().nullish(), retirementSystem: z.string().nullish(), socialSecurityCovered: z.boolean().default(true) });
 
 app.get('/api/clients', async () => q(`select c.*, (select count(*) from employee e where e.client_id=c.id and e.active)::int employees from client c order by name`));
 app.post('/api/clients', async (req) => {
   const b = ClientBody.parse(req.body);
-  return (await q('insert into client(name,fein,home_state,pay_frequency,futa_exempt,employee_count,current_vendor,withhold_resident_local,notes) values($1,$2,$3,$4,$5,$6,$7,$8,$9) returning *', [b.name, b.fein ?? null, b.homeState ?? null, b.payFrequency, b.futaExempt, b.employeeCount ?? null, b.currentVendor ?? null, b.withholdResidentLocal, b.notes ?? null]))[0];
+  return (await q('insert into client(name,fein,home_state,pay_frequency,futa_exempt,employee_count,current_vendor,withhold_resident_local,notes,retirement_system,social_security_covered) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning *', [b.name, b.fein ?? null, b.homeState ?? null, b.payFrequency, b.futaExempt, b.employeeCount ?? null, b.currentVendor ?? null, b.withholdResidentLocal, b.notes ?? null, b.retirementSystem || null, b.socialSecurityCovered]))[0];
 });
 app.get('/api/clients/:id', async (req) => {
   const id = (req.params as any).id;
@@ -117,7 +117,7 @@ app.get('/api/clients/:id', async (req) => {
 });
 app.put('/api/clients/:id', async (req) => {
   const b = ClientBody.parse(req.body);
-  return (await q('update client set name=$2,fein=$3,home_state=$4,pay_frequency=$5,futa_exempt=$6,employee_count=$7,current_vendor=$8,withhold_resident_local=$9,notes=$10 where id=$1 returning *', [(req.params as any).id, b.name, b.fein ?? null, b.homeState ?? null, b.payFrequency, b.futaExempt, b.employeeCount ?? null, b.currentVendor ?? null, b.withholdResidentLocal, b.notes ?? null]))[0];
+  return (await q('update client set name=$2,fein=$3,home_state=$4,pay_frequency=$5,futa_exempt=$6,employee_count=$7,current_vendor=$8,withhold_resident_local=$9,notes=$10,retirement_system=$11,social_security_covered=$12 where id=$1 returning *', [(req.params as any).id, b.name, b.fein ?? null, b.homeState ?? null, b.payFrequency, b.futaExempt, b.employeeCount ?? null, b.currentVendor ?? null, b.withholdResidentLocal, b.notes ?? null, b.retirementSystem || null, b.socialSecurityCovered]))[0];
 });
 app.post('/api/clients/:id/locations', async (req) => {
   const b = z.object({ label: z.string(), state: z.string(), localCodes: z.array(z.string()).default([]), address: z.string().nullish() }).parse(req.body);

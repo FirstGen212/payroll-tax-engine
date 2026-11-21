@@ -182,7 +182,18 @@ export const BENEFIT_LIMITS: BenefitLimit[] = [
 ];
 
 export const RETIREMENT_SYSTEMS: RetirementSystem[] = [
-  { code: 'TX_TRS', name: 'Teacher Retirement System of Texas', state: 'TX', memberRate: 0.0825, employerRate: 0.0825, pickup414h: true, socialSecurityTypicallyCovered: 'varies', effectiveFrom: '2023-09-01', status: 'unverified', sources: ['research-memory-2026'], notes: 'Member 8.25% of creditable compensation (SB 12, 2019 schedule). Most Texas school districts do not participate in Social Security: Medicare-only for hires after 3/31/1986. Non-OASDI districts also pay TRS-Care and TRS-ActiveCare premiums separately.' },
+  {
+    code: 'TX_TRS', name: 'Teacher Retirement System of Texas', state: 'TX', memberRate: 0.0825, employerRate: 0.02, pickup414h: true, socialSecurityTypicallyCovered: 'varies',
+    effectiveFrom: '2024-09-01', status: 'published', sources: ['trs-contribution-rates', 'trs-member-contributions', 'trs-creditable-comp', 'tx-tac-34-25-21', 'tx-tac-34-25-22', 'irs-slg-coverage', 'ssa-mandatory-medicare'],
+    rateYear: 'FY2027 (Sept 1, 2026 to Aug 31, 2027); the same rates applied in FY2025 and FY2026',
+    cafeteriaReductionsCovered: true,
+    otherContributions: [
+      { key: 'member_trs_care', label: 'Member TRS-Care', payer: 'member', rate: 0.0065 },
+      { key: 'state', label: 'State of Texas contribution', payer: 'state', rate: 0.0825 },
+      { key: 'employer_trs_care', label: 'Employer TRS-Care', payer: 'employer', rate: 0.0075 },
+    ],
+    notes: 'Member 8.25% is deducted pre-tax (414(h)(2) pick-up): out of federal income tax wages, still in Social Security and Medicare wages. The public education employer pays 2% and 0.75% TRS-Care; the state pays 8.25%. TRS compensation includes amounts withheld under a qualifying Section 125 cafeteria plan (34 TAC 25.21(c)(5), 25.22), so a cafeteria plan does not lower TRS contributions or the pension, provided the plan is offered to all TRS members, uses a written salary reduction agreement, offers only the listed benefit types and has no cash option. Most Texas school districts have no Section 218 agreement, so members pay no Social Security; Medicare is mandatory for anyone hired after March 31, 1986. Return-to-work retirees bring a 16.5% pension surcharge and a $535 TRS-Care surcharge per month (employer cost, not modeled).',
+  },
   { code: 'TX_ERS', name: 'Employees Retirement System of Texas', state: 'TX', memberRate: 0.095, pickup414h: true, socialSecurityTypicallyCovered: true, effectiveFrom: '2021-09-01', status: 'unverified', sources: ['research-memory-2026'] },
   { code: 'TX_TMRS', name: 'Texas Municipal Retirement System', state: 'TX', memberRate: 0.07, pickup414h: true, socialSecurityTypicallyCovered: 'varies', effectiveFrom: '2020-01-01', status: 'unverified', sources: ['research-memory-2026'], notes: 'City elects 5%, 6% or 7% member rate.' },
   { code: 'TX_TCDRS', name: 'Texas County & District Retirement System', state: 'TX', memberRate: 0.07, pickup414h: true, socialSecurityTypicallyCovered: 'varies', effectiveFrom: '2020-01-01', status: 'unverified', sources: ['research-memory-2026'], notes: 'Employer elects 4%-7% member rate.' },

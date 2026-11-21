@@ -16,7 +16,11 @@ const FIELD_LABELS: Record<string, string> = {
   additionalSit: 'Additional SITWH', healthMonthly: 'Group Health / month (pre-tax)', otherPretaxMonthly: 'Other Pre-Tax / month', retirementMonthly: '401(k) / IRA $ / month',
   retirementPercent: '401(k) %', postTaxMonthly: 'Post-Tax / month', proposedDeduction: 'First Gen Deduction Amount', tips: 'Tips', pto: 'PTO',
   reimbursements: 'Reimbursements', confidence: 'Confidence', birthDate: 'Birth Date',
+  retirementSystemContribution: 'TRS / retirement system $ per check', socialSecurityPaid: 'Social Security withheld (yes/no or $)',
 };
+
+/** Payroll models a proposal can use. Only systems whose rates were read from the agency are offered. */
+const PAYROLL_MODELS: [string, string][] = [['', 'Private employer'], ['TX_TRS', 'Texas TRS (school district)']];
 const REQUIRED = ['grossPay', 'payFrequency', 'workState', 'federalFilingStatus'];
 const ORDER = ['Eligible', 'PT Eligible', 'No Federal Taxes Paid', 'NEEDS REVIEW', 'Not Eligible - Insufficient Savings', 'Not Eligible - Insufficient Savings + No Federal Taxes Paid', 'Not Eligible - Low Income', 'Not Eligible - Insufficient Hours', 'Not Eligible - Insufficient Funds', 'Not Eligible - No Gross Compensation'];
 const SHORT = (e: string) => e.replace('Not Eligible - ', '');
@@ -122,7 +126,12 @@ export default function ProposalBuilder() {
   const pickClient = (cid: string) => {
     const c = clients.find((x) => x.id === cid);
     setMeta({ ...meta, clientId: cid, name: meta.name || (c ? `${c.name} proposal` : '') });
-    if (c) setSettings({ ...settings, employer: { ...settings.employer, name: c.name, homeState: c.home_state ?? undefined, futaExempt: c.futa_exempt }, vendorProfileId: c.current_vendor ?? settings.vendorProfileId });
+    if (c) setSettings({
+      ...settings, employer: { ...settings.employer, name: c.name, homeState: c.home_state ?? undefined, futaExempt: c.futa_exempt }, vendorProfileId: c.current_vendor ?? settings.vendorProfileId,
+      // The client's payroll model and Social Security coverage carry into the proposal.
+      retirementSystem: c.retirement_system ?? '',
+      publicEmployer: { ...settings.publicEmployer, socialSecurityCovered: c.retirement_system ? !!c.social_security_covered : false },
+    });
   };
 
   if (!defaults || !settings) return <p className="muted">Loading…</p>;
@@ -136,6 +145,11 @@ export default function ProposalBuilder() {
     void calculate(next);
   };
   const setPT = (p: any) => setS({ partTime: { ...settings.partTime, ...p } });
+  const setPub = (p: any) => setS({ publicEmployer: { ...settings.publicEmployer, ...p } });
+  // Governments are FUTA-exempt; switching to a public model turns that on (it can still be changed under Calculation).
+  const setModel = (code: string) => setS({ retirementSystem: code, ...(code ? { employer: { ...settings.employer, futaExempt: true } } : {}) });
+  const rsys = (ref?.retirementSystems ?? []).find((r: any) => r.code === settings.retirementSystem);
+  const noSS = !!settings.retirementSystem && !settings.publicEmployer?.socialSecurityCovered;
   const mappedCount = Object.values(mapping).filter(Boolean).length;
   const missing = REQUIRED.filter((f) => !mapping[f]);
   const step = result ? 3 : rows.length ? 2 : 1;
@@ -146,7 +160,7 @@ export default function ProposalBuilder() {
       <div className="noprint">
         <PageHead eyebrow={<><Link to="/proposals">Proposal tool</Link> / {id ? 'Proposal' : 'New proposal'}</>} title={meta.company ?? (meta.name || 'New proposal')}>
           {result
-            ? <><b>{result.summary.eligibleTotal}</b> of <b>{result.summary.employees}</b> employees qualify, for <b>{money(result.summary.monthlySavings.total)}</b> a month in allotments and a <b>{money(result.summary.valuationIncrease)}</b> valuation increase.</>
+            ? <><b>{result.summary.eligibleTotal}</b> of <b>{result.summary.employees}</b> employees qualify, for <b>{money(result.summary.monthlySavings.total)}</b> a month in allotments and {result.summary.retirement ? <><b>{money(result.summary.employerAnnualSavings.total)}</b> a year in employer savings.</> : <>a <b>{money(result.summary.valuationIncrease)}</b> valuation increase.</>}</>
             : rows.length ? <>Read <b>{rows.length}</b> rows. Check the column mapping, then calculate.</> : 'Upload a census, underwriting sheet or payroll register to compare every employee\'s taxes before and after the First Gen deduction.'}
         </PageHead>
       </div>
@@ -169,6 +183,37 @@ export default function ProposalBuilder() {
 
       <div className="panel noprint">
         <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+          <span className="row" style={{ alignItems: 'center', gap: 8 }}><h3 style={{ margin: 0 }}>Payroll model</h3>
+            <div className="seg">{PAYROLL_MODELS.map(([k, l]) => <button key={k || 'private'} className={(settings.retirementSystem ?? '') === k ? 'on' : ''} onClick={() => setModel(k)}>{l}</button>)}</div>
+          </span>
+          <span className="muted small">{settings.retirementSystem
+            ? <>{rsys?.name ?? settings.retirementSystem} · member {((rsys?.memberRate ?? 0) * 100).toFixed(2)}% pre-tax · {noSS ? 'Medicare only (no Social Security)' : 'Social Security + Medicare'}</>
+            : 'Social Security + Medicare on every employee'}</span>
+        </div>
+        {settings.retirementSystem && (
+          <>
+            <div className="row" style={{ marginTop: 12 }}>
+              <label className="check"><input type="checkbox" checked={!!settings.publicEmployer?.socialSecurityCovered} onChange={(e) => setPub({ socialSecurityCovered: e.target.checked })} />District pays Social Security (has a Section 218 agreement)</label>
+              <label className="check"><input type="checkbox" disabled={!!settings.publicEmployer?.socialSecurityCovered} checked={!!settings.publicEmployer?.detectSocialSecurity} onChange={(e) => setPub({ detectSocialSecurity: e.target.checked })} />Include Social Security for anyone the file shows paying it</label>
+              <label className="check"><input type="checkbox" checked={!!settings.publicEmployer?.useFileContribution} onChange={(e) => setPub({ useFileContribution: e.target.checked })} />Use the file's TRS amount when it has one</label>
+              <label className="check"><input type="checkbox" checked={!!settings.publicEmployer?.cafeteriaReductionsCovered} onChange={(e) => setPub({ cafeteriaReductionsCovered: e.target.checked })} />TRS counts the First Gen deduction as pay</label>
+            </div>
+            <div className="fg-callout" style={{ marginBottom: 0 }}>
+              <span>
+                The {(rsys?.memberRate * 100 || 8.25).toFixed(2)}% member contribution comes out before federal income tax but not before Medicare{settings.publicEmployer?.socialSecurityCovered ? ' and Social Security' : ''}, on pay before any Section 125 deduction.
+                {noSS ? ' Most Texas districts do not pay Social Security, so each dollar of the First Gen deduction saves 1.45% Medicare for the district and income tax plus 1.45% Medicare for the employee.' : ' Each dollar of the First Gen deduction saves 7.65% Social Security and Medicare for the district.'}
+                {settings.publicEmployer?.cafeteriaReductionsCovered
+                  ? ' TRS counts Section 125 salary reductions as pay (34 TAC 25.21), so TRS contributions and pensions do not change, as long as the plan is offered to every TRS member, uses a written salary reduction agreement and has no cash option.'
+                  : ' Modeled as if TRS does not count the deduction: TRS contributions, and the pension they build, go down with it.'}
+                {' '}Government employers are FUTA-exempt. Rates: {rsys?.rateYear ?? 'TRS'}.
+              </span>
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="panel noprint">
+        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
           <span className="row" style={{ alignItems: 'center', gap: 8 }}><h3 style={{ margin: 0 }}>Eligibility requirements</h3><span className="badge b-neutral">11 rules</span><button className="small" onClick={() => setEditReq(!editReq)}>{editReq ? 'Close' : 'Edit'}</button></span>
           {!editReq && <span className="muted small">{settings.benefitPackages.find((p: any) => p.id === settings.benefitPackageId)?.name} package · allotment ≥ {money(settings.allotmentThreshold)} · low income ≤ {money(settings.lowIncomeMax)} · ≥ {settings.minHoursPerPeriod} hrs/period · review ≥ {money(settings.needsReviewAllotment)} · buffer {Math.round(settings.allotmentBuffer * 100)}% · deduction {money(settings.deductionPerCheck)}/check</span>}
         </div>
@@ -187,7 +232,7 @@ export default function ProposalBuilder() {
               <label>File's First Gen deduction amount is per<select value={settings.useRowDeduction ? settings.rowDeductionPer : 'ignore'} onChange={(e) => setS(e.target.value === 'ignore' ? { useRowDeduction: false } : { useRowDeduction: true, rowDeductionPer: e.target.value })}><option value="check">check</option><option value="month">month</option><option value="ignore">ignore it, use the amount above</option></select></label>
               <label>Employees with no federal tax withheld<select value={settings.noFederalTaxAs} onChange={(e) => setS({ noFederalTaxAs: e.target.value })}><option value="warning">Warning only (still eligible)</option><option value="status">Own status: No Federal Taxes Paid</option></select></label>
               <label>Participation: share of eligible employees expected to enroll (%)<input type="number" min={0} max={100} value={Math.round((settings.participationRate ?? 1) * 100)} onChange={(e) => setS({ participationRate: Math.min(100, Math.max(0, num(e.target.value))) / 100 })} /></label>
-              <label>Employer savings<select value={settings.employerSavingsBasis} onChange={(e) => setS({ employerSavingsBasis: e.target.value })}><option value="fica">Social Security + Medicare (7.65%)</option><option value="all">All employer taxes (adds FUTA, SUI, etc.)</option></select></label>
+              <label>Employer savings<select value={settings.employerSavingsBasis} onChange={(e) => setS({ employerSavingsBasis: e.target.value })}><option value="fica">{noSS ? 'Medicare only (1.45%, no Social Security)' : 'Social Security + Medicare (7.65%)'}</option><option value="all">All employer taxes (adds FUTA, SUI, etc.)</option></select></label>
             </div>
             <div className="row" style={{ marginTop: 12 }}>
               <label className="check"><input type="checkbox" checked={settings.includeCommission} onChange={(e) => setS({ includeCommission: e.target.checked })} />Include commission/bonus in gross pay</label>
@@ -260,7 +305,7 @@ export default function ProposalBuilder() {
         <Results result={result} settings={settings} setS={setS} view={view} setView={setView} meta={meta} busy={busy} editable={editable}
           onSave={save} onDownload={download} onPickProgram={editable ? pickProgram : () => {}} onOverride={setOverride} saveLabel={id ? 'Save changes' : 'Save proposal'} />
       )}
-      {result && tab === 'client' && <ClientPage id={id} dirty={dirty} repeats={result.settings.dedupe ? 0 : result.summary.duplicates?.length ?? 0} reportSettings={reportSettings} setReportSettings={(r: any) => { setReportSettings(r); setDirty(true); }} onSave={save} canShare={can('proposals.share')} editable={editable} />}
+      {result && tab === 'client' && <ClientPage publicEmployer={!!result?.summary?.retirement} id={id} dirty={dirty} repeats={result.settings.dedupe ? 0 : result.summary.duplicates?.length ?? 0} reportSettings={reportSettings} setReportSettings={(r: any) => { setReportSettings(r); setDirty(true); }} onSave={save} canShare={can('proposals.share')} editable={editable} />}
       {result && tab === 'history' && id && <History id={id} onLoad={(s: any) => { setSettings({ ...settings, ...s }); setTab('results'); void calculate({ ...settings, ...s }); }} editable={editable} />}
     </>
   );
@@ -322,6 +367,7 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
           <button className="small" disabled title="Next step: connect the app to Pipedrive">Send to Pipedrive</button>
           {busy && <span className="muted small">{busy}</span>}
         </div>
+        {s.retirement ? <p className="muted small" style={{ margin: '8px 0 0' }}>A public employer has no EBITDA, so this proposal shows no valuation increase. Employer savings use the {s.retirement.name} model: {s.retirement.socialSecurity === 'none' ? 'Medicare only, because the district does not pay Social Security' : 'Social Security where it is paid, plus Medicare'}.</p> : <>
         <div className="row" style={{ marginTop: 10, alignItems: 'flex-end' }}>
           <label>Industry<select value={industries.some((i) => i.key === settings.industry) ? settings.industry : ''} onChange={(e) => setValuation({ industry: e.target.value })}>
             <option value="">Choose an industry</option>
@@ -340,7 +386,7 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
           {typical && settings.multipleAuto === false && <>You typed this multiple. The table has <b>{typical.multiple.toFixed(1)}x</b> for this industry and size. <button className="small" onClick={() => setS({ ebitdaMultiple: typical.multiple, multipleAuto: true })}>Use {typical.multiple.toFixed(1)}x</button> </>}
           {!typical && <>Choose an industry to fill in the typical multiple. Until then the multiple is the one typed here. </>}
           <Link to="/multiples">See the multiples table</Link>
-        </p>
+        </p></>}
       </div>
 
       {view === 'results' && (
@@ -364,8 +410,12 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
               <div className="fg-legend"><span><i />Full plan <b>{s.eligibleFull}</b></span><span><i className="muted-fill" />Part-time <b>{s.eligiblePartTime}</b></span></div></div>
             <div className="kpi"><div className="l">Monthly allotments</div><div className="v">{money(s.monthlySavings.total)}</div>
               <div className="s">Average <b>{money(s.monthlySavings.average)}</b> · Annual <b>{money(s.monthlySavings.annual)}</b></div><div className="s">{money(s.monthlySavings.full)} full plan + {money(s.monthlySavings.partTime)} part-time</div></div>
-            <div className="kpi"><div className="l">Valuation increase</div><div className="v">{money(s.valuationIncrease)}</div>
-              <div className="s"><b>{money(s.employerAnnualSavings.total)}</b> employer savings a year × {result.settings.ebitdaMultiple}x EBITDA</div></div>
+            {s.retirement
+              ? <div className="kpi"><div className="l">Employer savings a year</div><div className="v">{money(s.employerAnnualSavings.total)}</div>
+                  <div className="s">{s.retirement.socialSecurity === 'none' ? 'Medicare only, no Social Security' : s.retirement.socialSecurity === 'some' ? <>Social Security for <b>{s.retirement.socialSecurityEmployees}</b>, Medicare for the rest</> : 'Social Security + Medicare'}</div>
+                  {s.retirement.memberAnnual.before > 0 && <div className="s">{s.retirement.memberAnnual.after === s.retirement.memberAnnual.before ? <>TRS contributions unchanged at <b>{money(s.retirement.memberAnnual.before)}</b> a year</> : <>TRS contributions <b>{money(s.retirement.memberAnnual.before)}</b> to <b>{money(s.retirement.memberAnnual.after)}</b> a year</>}</div>}</div>
+              : <div className="kpi"><div className="l">Valuation increase</div><div className="v">{money(s.valuationIncrease)}</div>
+                  <div className="s"><b>{money(s.employerAnnualSavings.total)}</b> employer savings a year × {result.settings.ebitdaMultiple}x EBITDA</div></div>}
             <div className="kpi"><div className="l">Allotment distribution</div>
               <div className="fg-bar tall"><span className="critical" style={{ width: `${(dist.below / distTotal) * 100}%` }} /><span className="muted-fill" style={{ width: `${(dist.near / distTotal) * 100}%` }} /><span style={{ width: `${(dist.atOrAbove / distTotal) * 100}%` }} /></div>
               <div className="fg-legend"><span><i className="critical" />Under {money(dist.lowEdge)} <b>{dist.below}</b></span><span><i className="muted-fill" />{money(dist.lowEdge)}–{money(dist.highEdge)} <b>{dist.near}</b></span><span><i />{money(dist.highEdge)}+ <b>{dist.atOrAbove}</b></span></div></div>
@@ -457,16 +507,20 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
           <h2 style={{ marginBottom: 4 }}>{meta.company ?? meta.name}: estimated savings with the First Gen benefit program</h2>
           <p className="muted" style={{ marginTop: 0 }}>Prepared by First Gen · Plan year {result.settings.year} · Estimates</p>
           <div className="kpis">
-            {[['Employees reviewed', s.employees], ['Eligible employees', `${s.eligibleTotal}`], ['Estimated employer savings per year', money(s.employerAnnualSavings.total)], ['Estimated valuation increase', money(s.valuationIncrease)]].map(([l, v]) => <div key={l} className="kpi"><div className="l">{l}</div><div className="v">{v}</div></div>)}
+            {[['Employees reviewed', s.employees], ['Eligible employees', `${s.eligibleTotal}`], ['Estimated employer savings per year', money(s.employerAnnualSavings.total)], ...(s.retirement ? [] : [['Estimated valuation increase', money(s.valuationIncrease)]])].map(([l, v]) => <div key={l} className="kpi"><div className="l">{l}</div><div className="v">{v}</div></div>)}
           </div>
           <h3>How it works</h3>
-          <p>Eligible employees enroll in a pre-tax benefit through the company's Section 125 plan, with a {s.benefitPackage?.name} preventative care package. Because the deduction comes out before taxes, both the employee's and the employer's payroll taxes go down. The employer saves Social Security and Medicare tax on every dollar deducted.</p>
+          <p>Eligible employees enroll in a pre-tax benefit through the company's Section 125 plan, with a {s.benefitPackage?.name} preventative care package. Because the deduction comes out before taxes, both the employee's and the employer's payroll taxes go down. {s.retirement
+            ? s.retirement.socialSecurity === 'none'
+              ? ` The district does not pay Social Security, so it saves Medicare tax (1.45%) on every dollar deducted. ${s.retirement.cafeteriaReductionsCovered ? `${s.retirement.name} counts the deduction as pay, so TRS contributions and pensions stay the same.` : ''}`
+              : ` The district saves Social Security (where it is paid) and Medicare tax on every dollar deducted. ${s.retirement.cafeteriaReductionsCovered ? `${s.retirement.name} counts the deduction as pay, so TRS contributions and pensions stay the same.` : ''}`
+            : ' The employer saves Social Security and Medicare tax on every dollar deducted.'}</p>
           <h3>Estimated impact</h3>
           <table style={{ maxWidth: 640 }}><tbody>
             <tr><td>Eligible employees (full plan / part-time plan)</td><td className="num">{s.eligibleFull} / {s.eligiblePartTime}</td></tr>
             <tr><td>Employer payroll tax savings per year</td><td className="num"><b>{money(s.employerAnnualSavings.total)}</b></td></tr>
             <tr><td>Employer savings per enrolled employee per year</td><td className="num">{money(s.employerAnnualSavings.perEmployee)}</td></tr>
-            <tr><td>Valuation increase at {result.settings.ebitdaMultiple}x EBITDA</td><td className="num"><b>{money(s.valuationIncrease)}</b></td></tr>
+            {!s.retirement && <tr><td>Valuation increase at {result.settings.ebitdaMultiple}x EBITDA</td><td className="num"><b>{money(s.valuationIncrease)}</b></td></tr>}
             <tr><td>Employee tax savings per year</td><td className="num">{money(s.employeeAnnualTaxSavings)}</td></tr>
           </tbody></table>
           <h3>Who qualifies</h3>
@@ -503,7 +557,7 @@ function OverrideEditor({ e, onChange, busy, partTime }: any) {
 const REPORT_COLS: [string, string][] = [['state', 'State'], ['plan', 'Plan'], ['deduction', 'Deduction per check'], ['employeeSavings', 'Employee savings per month'], ['employerSavings', 'Employer savings per year']];
 
 /** Edit what the client sees, preview it, and publish fresh links. */
-function ClientPage({ id, dirty, repeats, reportSettings: rs, setReportSettings, onSave, canShare, editable }: any) {
+function ClientPage({ id, dirty, repeats, reportSettings: rs, setReportSettings, onSave, canShare, editable, publicEmployer }: any) {
   const [preview, setPreview] = useState<any>();
   const [links, setLinks] = useState<any[]>([]);
   const [msg, setMsg] = useState('');
@@ -557,7 +611,7 @@ function ClientPage({ id, dirty, repeats, reportSettings: rs, setReportSettings,
             <label>Employee section<select value={rs.showEmployees} onChange={(e) => set({ showEmployees: e.target.value })}><option value="all">Everyone, with their status and the reason</option><option value="list">Eligible employees only</option><option value="counts">Counts by status only</option><option value="none">Leave out</option></select></label>
             {rs.showEmployees === 'all' && <p className="fg-note" style={{ margin: 0 }}>People who do not qualify are listed by name with the reason (pay, hours, W-4 details) and what would change it. Anyone with the link can read it.</p>}
             {(rs.showEmployees === 'list' || rs.showEmployees === 'all') && <div><div className="fg-label" style={{ marginBottom: 4 }}>Columns for eligible employees</div>{REPORT_COLS.map(([k, l]) => <label key={k} className="check"><input type="checkbox" checked={rs.employeeColumns.includes(k)} onChange={(e) => set({ employeeColumns: e.target.checked ? [...rs.employeeColumns, k] : rs.employeeColumns.filter((c: string) => c !== k) })} />{l}</label>)}</div>}
-            <label className="check"><input type="checkbox" checked={rs.showValuation} onChange={(e) => set({ showValuation: e.target.checked })} />Show the valuation increase</label>
+            <label className="check" title={publicEmployer ? 'A public employer has no EBITDA, so the client page leaves the valuation out' : undefined}><input type="checkbox" disabled={publicEmployer} checked={rs.showValuation && !publicEmployer} onChange={(e) => set({ showValuation: e.target.checked })} />Show the valuation increase{publicEmployer ? ' (not for public employers)' : ''}</label>
             <label className="check"><input type="checkbox" checked={rs.showCompanies} onChange={(e) => set({ showCompanies: e.target.checked })} />Break out each company (multi-company files)</label>
             <label className="check"><input type="checkbox" checked={rs.showSource} onChange={(e) => set({ showSource: e.target.checked })} />Show the name of the file the numbers came from</label>
             {rs.steps.map((st: any, i: number) => (
