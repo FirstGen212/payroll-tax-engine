@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { loadTaxDatabase } from '@pte/tax-data';
-import { analyzePrograms, runProposal } from '../src/index.js';
+import { analyzePrograms, planCacheStats, runProposal } from '../src/index.js';
 import type { CensusRow } from '../src/index.js';
 import { analyzePrograms as analyzeInBrowser, analyzeTiers as tiersInBrowser, cleanPrices, pricePerCheck } from '../../../apps/web/src/pricing';
 import { analyzeTiers } from '../src/index.js';
@@ -44,14 +44,39 @@ describe('margin analyzer', () => {
     }
   });
 
-  it('picking a price and recalculating marks the employees the table counted at that price', () => {
-    const at139 = runProposal(rows, { year: 2027, allotmentThreshold: 139 }, db);
-    const counted = result.summary.programs.find((p) => p.price === 139)!.eligible;
-    const fullPlan = at139.employees.filter((e) => e.eligibility === 'Eligible' && !e.override).length;
-    // The table counts everyone whose savings reach the price and who pass the pay and hours rules; the recalculated
-    // proposal can only hold back people for reasons outside those (missing hours, low data confidence).
-    expect(fullPlan).toBeLessThanOrEqual(counted);
-    expect(fullPlan).toBeGreaterThan(0);
+  it('picking a price and recalculating gives every total the table showed for that price', () => {
+    for (const price of [159, 149, 139, 129]) {
+      const at = runProposal(rows, { year: 2027, programPrices: [159, 149, 139, 129], allotmentThreshold: price }, db);
+      const row = result.summary.programs.find((p) => p.price === price)!;
+      const full = at.employees.filter((e) => e.eligibility === 'Eligible');
+      // The table's count is exactly the full-plan count the recalculated proposal shows, so the two never disagree.
+      expect(at.summary.eligibleFull).toBe(row.eligible);
+      expect(full.length).toBe(row.eligible);
+      // And the recalculated proposal's own table row for that price is the same row.
+      expect(at.summary.programs.find((p) => p.price === price)).toEqual(row);
+      // The totals below the table follow the price: allotments are the eligible people's allotments.
+      const ptOn = at.employees.filter((e) => e.eligibility === 'PT Eligible').reduce((a, e) => a + e.partTime!.allotment, 0);
+      expect(at.summary.monthlySavings.full).toBeCloseTo(full.reduce((a, e) => a + e.monthly!.allotment, 0), 1);
+      expect(at.summary.monthlySavings.total).toBeCloseTo(at.summary.monthlySavings.full + ptOn, 1);
+    }
+    const hi = runProposal(rows, { year: 2027, allotmentThreshold: 159 }, db).summary;
+    const lo = runProposal(rows, { year: 2027, allotmentThreshold: 129 }, db).summary;
+    expect(lo.eligibleFull).toBeGreaterThan(hi.eligibleFull);
+    expect(lo.monthlySavings.full).toBeGreaterThan(hi.monthlySavings.full);
+    expect(lo.employerAnnualSavings.full).toBeGreaterThan(hi.employerAnnualSavings.full);
+  });
+
+  it('a price change reuses each employee\'s year of paychecks and gives exactly what a fresh calculation gives', () => {
+    const before = planCacheStats.hits;
+    const cached = runProposal(rows, { year: 2027, allotmentThreshold: 139 }, db);
+    expect(planCacheStats.hits).toBeGreaterThan(before);
+    // A copy of the tax database has its own, empty store, so this run calculates everything again.
+    const fresh = runProposal(rows, { year: 2027, allotmentThreshold: 139 }, { ...db });
+    expect(cached.summary).toEqual(fresh.summary);
+    expect(cached.employees.map((e) => [e.eligibility, e.monthly, e.partTime?.allotment, e.explanation])).toEqual(fresh.employees.map((e) => [e.eligibility, e.monthly, e.partTime?.allotment, e.explanation]));
+    // Changing something that does change taxes (the buffer) is not served from the store.
+    const buffered = runProposal(rows, { year: 2027, allotmentThreshold: 139, allotmentBuffer: 0.5 }, db);
+    expect(buffered.employees[10].monthly!.allotment).not.toBe(cached.employees[10].monthly!.allotment);
   });
 
   it('cleans typed prices: drops blanks and out-of-range values, rounds to cents, removes repeats, highest first, at most 12', () => {

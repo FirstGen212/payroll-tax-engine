@@ -806,8 +806,47 @@ export function payInputFromRow(row: CensusRow, freq: PayFrequency, grossPerChec
 
 const usd = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 
-/** Run one employee for a full year with and without a pre-tax deduction. */
+/**
+ * Settings that never change an employee's taxes. Picking a different program price, an override note or a review
+ * line re-runs the rules but not a year of paychecks, so these are left out of the key the tax results are kept under.
+ */
+const NOT_TAX_SETTINGS = new Set(['allotmentThreshold', 'programPrices', 'overrides', 'needsReviewAllotment', 'lowIncomeMax', 'minHoursPerPeriod', 'noFederalTaxAs', 'reviewMinConfidence', 'stateTaxThreshold', 'participationRate', 'dedupe', 'ebitdaMultiple', 'multipleAuto', 'multipleInfo', 'industry', 'ownership', 'companySize', 'benefitPackageId']);
+const settingsKeys = new WeakMap<ProposalSettings, string>();
+const taxSettingsKey = (s: ProposalSettings) => {
+  let k = settingsKeys.get(s);
+  if (k === undefined) {
+    k = JSON.stringify(Object.keys(s).filter((x) => !NOT_TAX_SETTINGS.has(x)).sort().map((x) => [x, (s as any)[x]]));
+    settingsKeys.set(s, k);
+  }
+  return k;
+};
+/** At most this many employee-years are kept per tax database (a few MB): enough for two large proposals. */
+export const PLAN_CACHE_SIZE = 8000;
+const planCaches = new WeakMap<TaxDatabase, Map<string, PlanCalc>>();
+export const planCacheStats = { hits: 0, misses: 0 };
+
+/**
+ * Run one employee for a full year with and without a pre-tax deduction. Results are kept (newest first, bounded) so
+ * recalculating the same people at another program price only re-applies the rules, which takes a fraction of the time.
+ */
 function planCalc(input: PayInput, freq: PayFrequency, grossPerCheck: number, dedPerCheck: number, s: ProposalSettings, db: TaxDatabase): PlanCalc {
+  let cache = planCaches.get(db);
+  if (!cache) { cache = new Map(); planCaches.set(db, cache); }
+  const key = `${freq}|${grossPerCheck}|${dedPerCheck}|${JSON.stringify(input)}|${taxSettingsKey(s)}`;
+  const hit = cache.get(key);
+  if (hit) {
+    planCacheStats.hits++;
+    cache.delete(key); cache.set(key, hit); // most recently used last
+    return structuredClone(hit);
+  }
+  planCacheStats.misses++;
+  const out = planCalcNow(input, freq, grossPerCheck, dedPerCheck, s, db);
+  cache.set(key, structuredClone(out));
+  if (cache.size > PLAN_CACHE_SIZE) cache.delete(cache.keys().next().value!);
+  return out;
+}
+
+function planCalcNow(input: PayInput, freq: PayFrequency, grossPerCheck: number, dedPerCheck: number, s: ProposalSettings, db: TaxDatabase): PlanCalc {
   const periods = PERIODS_PER_YEAR[freq];
   const benefitPerCheck = r2(dedPerCheck * s.benefitPaybackPercent);
   const dates = checkDatesFor(s.year, freq);
@@ -1009,7 +1048,10 @@ function evaluateRules(row: CensusRow, s: ProposalSettings, db: TaxDatabase): Pr
   }
   // Everything except the allotment test (for the price-point analyzer)
   if (noFed && s.noFederalTaxAs === 'warning') res.flags.unshift('⚠ The engine calculates no federal income tax withheld for this W-4 and pay.');
-  res.passesNonSavingsRules = annualGross > s.lowIncomeMax && !(noFed && s.noFederalTaxAs === 'status') && hoursPerPeriod !== undefined && hoursPerPeriod >= s.minHoursPerPeriod;
+  // Every rule except the savings test, so the margin table's count at a price is the number the proposal shows once
+  // it is recalculated at that price.
+  res.passesNonSavingsRules = annualGross > s.lowIncomeMax && !(noFed && s.noFederalTaxAs === 'status') && hoursPerPeriod !== undefined && hoursPerPeriod >= s.minHoursPerPeriod
+    && !(s.reviewMinConfidence > 0 && row.confidence !== undefined && row.confidence < s.reviewMinConfidence);
   return applyStatusOverride(tryPartTime(res, input, freq, gross, s, db), input, freq, gross, s, db);
 }
 
