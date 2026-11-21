@@ -601,14 +601,16 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
             {[['Employees reviewed', s.employees], ['Eligible employees', `${s.eligibleTotal}`], ['Estimated employer savings per year', money(s.employerAnnualSavings.total)], ...(s.adminFee?.annual > 0 ? [['Employer savings after admin fee', money(s.employerNetAnnualSavings)]] : []), ...(s.retirement ? [] : [['Estimated valuation increase', money(s.valuationIncrease)]])].map(([l, v]) => <div key={l} className="kpi"><div className="l">{l}</div><div className="v">{v}</div></div>)}
           </div>
           <h3>How it works</h3>
-          <p>Eligible employees enroll in a pre-tax benefit through the company's Section 125 plan, with a {s.benefitPackage?.name} preventative care package. Because the deduction comes out before taxes, both the employee's and the employer's payroll taxes go down. {s.retirement
+          <p>Eligible employees enroll in a pre-tax benefit through the company's Section 125 plan, with {s.pricingMode === 'tiers' ? 'a preventative care package set by the plan their tax savings support' : `a ${s.benefitPackage?.name} preventative care package`}. Because the deduction comes out before taxes, both the employee's and the employer's payroll taxes go down. {s.retirement
             ? s.retirement.socialSecurity === 'none'
               ? ` The district does not pay Social Security, so it saves Medicare tax (1.45%) on every dollar deducted. ${s.retirement.cafeteriaReductionsCovered ? `${s.retirement.name} counts the deduction as pay, so TRS contributions and pensions stay the same.` : ''}`
               : ` The district saves Social Security (where it is paid) and Medicare tax on every dollar deducted. ${s.retirement.cafeteriaReductionsCovered ? `${s.retirement.name} counts the deduction as pay, so TRS contributions and pensions stay the same.` : ''}`
             : ' The employer saves Social Security and Medicare tax on every dollar deducted.'}</p>
           <h3>Estimated impact</h3>
           <table style={{ maxWidth: 640 }}><tbody>
-            <tr><td>Eligible employees (full plan / part-time plan)</td><td className="num">{s.eligibleFull} / {s.eligiblePartTime}</td></tr>
+            {s.pricingMode === 'tiers'
+              ? (s.tiers ?? []).filter((t: any) => t.id !== 'total' && t.enrolled > 0).map((t: any) => <tr key={t.id}><td>{t.name} plan ({money(t.price)} a month, {t.packageName})</td><td className="num">{t.enrolled}</td></tr>)
+              : <tr><td>Eligible employees (full plan / part-time plan)</td><td className="num">{s.eligibleFull} / {s.eligiblePartTime}</td></tr>}
             <tr><td>Employer payroll tax savings per year</td><td className="num"><b>{money(s.employerAnnualSavings.total)}</b></td></tr>
             {s.adminFee?.annual > 0 && <tr><td>Admin fee per year ({money(s.adminFee.amount)} {s.adminFee.per === 'month' ? 'a month' : 'per enrolled employee a month'})</td><td className="num">−{money(s.adminFee.annual)}</td></tr>}
             {s.adminFee?.annual > 0 && <tr><td>Remaining employer savings per year</td><td className="num"><b>{money(s.employerNetAnnualSavings)}</b></td></tr>}

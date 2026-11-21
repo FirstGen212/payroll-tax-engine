@@ -95,11 +95,11 @@ describe('tier margins', () => {
     expect(tiersInBrowser(result.employees, repriced, s.benefitPackages)).toEqual(analyzeTiers(result.employees, repriced, s.benefitPackages));
   });
 
-  it('margin is price less the package cost, Essential is marked as losing money, and the total adds up', () => {
+  it('margin is price less the package cost (the $55 MEC by default), Essential is marked as losing money, and the total adds up', () => {
     const t = result.summary.tiers!;
     const by = Object.fromEntries(t.map((r) => [r.id, r]));
-    expect(by.plus.marginPerEmployee).toBe(159 - 65);
-    expect(by.standard.marginPerEmployee).toBe(117 - 65);
+    expect(by.plus.marginPerEmployee).toBe(159 - 55);
+    expect(by.standard.marginPerEmployee).toBe(117 - 55);
     expect(by.basic.marginPerEmployee).toBe(74 - 55);
     expect(by.essential.marginPerEmployee).toBe(31 - 55);
     expect(t.filter((r) => r.losesMoney).map((r) => r.id)).toEqual(['essential']);
