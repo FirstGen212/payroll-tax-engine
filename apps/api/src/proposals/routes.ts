@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import ExcelJS from 'exceljs';
 import { z } from 'zod';
-import { CENSUS_COLUMN_ALIASES, DEFAULT_PROPOSAL_SETTINGS, ELIGIBILITY_ORDER, autoMapColumns, rowsFromSheet, runProposal } from '@pte/engine';
+import { CENSUS_COLUMN_ALIASES, DEFAULT_PROPOSAL_SETTINGS, ELIGIBILITY_ORDER, autoMapColumns, rowsFromSheet } from '@pte/engine';
 import type { CensusRow, ProposalResult, ProposalSettings } from '@pte/engine';
 import type { TaxDatabase } from '@pte/tax-data';
 import { randomBytes } from 'node:crypto';
@@ -13,6 +13,7 @@ import { DEFAULT_REPORT_SETTINGS, multipleNote, ReportSettingsIn, buildSnapshot,
 import { getTaxDb } from '../taxdb.js';
 import { MAX_COLUMNS, MAX_ROWS_PER_SHEET, parseWorkbook } from './parse.js';
 import { workGate } from '../security.js';
+import { runProposalOffThread } from './calc-worker.js';
 
 export const STATUSES = ['draft', 'review', 'completed', 'sent', 'won', 'lost'] as const;
 const httpError = (statusCode: number, message: string) => Object.assign(new Error(message), { statusCode });
@@ -97,7 +98,7 @@ async function calculateNow(body: z.infer<typeof Calc>): Promise<ProposalResult 
   matchLocals(rows, db);
   const settings = await withTableMultiple(body.settings as Partial<ProposalSettings>);
   const conventions = await vendorConventions(settings.vendorProfileId);
-  const result = runProposal(rows, { ...settings, conventions }, db);
+  const result = await runProposalOffThread(rows, { ...settings, conventions }, db);
   const unmatched = [...new Set(rows.filter((r) => r.municipality && !r.localCodes).map((r) => `${r.workState ?? ''} ${r.municipality}`))];
   for (const e of result.employees) if (e.row.municipality && !e.row.localCodes) e.flags.push(`Municipality "${e.row.municipality}" did not match a local tax jurisdiction; no local tax calculated.`);
   return { ...result, unmatchedMunicipalities: unmatched };
