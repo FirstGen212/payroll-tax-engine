@@ -9,9 +9,8 @@ const db = vi.hoisted(() => ({
   audit: [] as { action: string; actor: unknown; asUser: unknown }[],
   writes: [] as string[],
 }));
-vi.mock('../src/db.js', () => ({
-  pool: {},
-  q: vi.fn(async (sql: string, params: unknown[] = []) => {
+vi.mock('../src/db.js', () => {
+  const q = vi.fn(async (sql: string, params: unknown[] = []): Promise<any[]> => {
     const s = sql.trim();
     if (s.includes('from app_session s join app_user u')) { const row = db.sessions.get(String(params[0])); return row ? [row] : []; }
     if (s.startsWith('select count(*)::int n from app_user')) return [{ n: db.users.length }];
@@ -22,9 +21,14 @@ vi.mock('../src/db.js', () => ({
     if (s.startsWith('select 1 from app_user where email=$1')) return db.users.filter((u) => u.email === params[0] && u.id !== params[1]);
     if (s.startsWith('insert into app_user')) { db.writes.push('insert user'); return [{ id: 'new-user' }]; }
     if (s.startsWith('update') || s.startsWith('insert') || s.startsWith('delete')) { db.writes.push(s.split(/\s+/).slice(0, 3).join(' ')); return []; }
+    if (s.startsWith('select 1 from app_user limit 1')) return db.users.slice(0, 1);
+    if (s.startsWith('select pg_advisory_xact_lock')) return [];
     return [];
-  }),
-}));
+  });
+  // Runs the transaction's queries through the same stand-in.
+  const tx = async (fn: (c: { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> }) => Promise<unknown>) => fn({ query: async (sql, params) => ({ rows: await q(sql, params) }) });
+  return { pool: {}, q, tx };
+});
 
 import { NO_RULE, PERMISSIONS, ROLES, effectivePermissions, hashPassword, registerAuth, requiredPermission } from '../src/auth.js';
 

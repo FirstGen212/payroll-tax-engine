@@ -1,11 +1,12 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { api, downloadFile, money } from '../api';
+import { api, csvFile, downloadFile, money, saveBlob } from '../api';
 import { PageHead, StateSelect, useReference } from '../components';
 import { useCan } from '../auth';
 import { PROPOSAL_STATUSES, StatusPill } from './Proposals';
 import { ReportView } from './Report';
 import { BASIS_WORD, pickMultiple, type MultiplesData } from './Multiples';
+import { analyzePrograms, cleanPrices } from '../pricing';
 
 const FIELD_LABELS: Record<string, string> = {
   company: 'Company Name', employeeId: 'Employee ID', firstName: 'First Name', lastName: 'Last Name', workState: 'Work State', residenceState: 'Residence State',
@@ -60,6 +61,8 @@ export default function ProposalBuilder() {
   const [tab, setTab] = useState<'results' | 'client' | 'history'>('results');
   const [reportSettings, setReportSettings] = useState<any>();
   const [dirty, setDirty] = useState(false);
+  // Only the newest calculation's answer is shown: clicking through prices quickly must not let an older one land last.
+  const calcSeq = useRef(0);
   const can = useCan();
   const editable = can('proposals.edit');
 
@@ -89,6 +92,7 @@ export default function ProposalBuilder() {
 
   const upload = async (f?: File) => {
     if (!f) return;
+    if (f.size > 15 * 1024 * 1024) { setErr(`${f.name} is ${(f.size / 1024 / 1024).toFixed(0)} MB. Files up to 15 MB can be read; delete unused tabs or split the file.`); return; }
     setErr(''); setBusy('Reading file…');
     try {
       const parsed = await api('/proposals/parse', { json: { fileName: f.name, base64: await toBase64(f) } });
@@ -98,9 +102,13 @@ export default function ProposalBuilder() {
   };
 
   const body = (s = settings) => ({ headers, rows, mapping, settings: s, name: meta.name || 'Proposal', clientId: meta.clientId || null, company: meta.company ?? null, fileName: file?.fileName ?? null, sheetName, status: meta.status, notes: meta.notes || null, reportSettings });
-  const calculate = async (s = settings) => {
-    setErr(''); setBusy(`Calculating ${rows.length} rows: a full year of checks for each, with and without the deduction…`);
-    try { setResult(await api('/proposals/calculate', { json: body(s) })); setDirty(!!id); } catch (e: any) { setErr(e.message); } finally { setBusy(''); }
+  const calculate = async (s = settings, note?: string) => {
+    const n = ++calcSeq.current;
+    setErr(''); setBusy(note ?? `Calculating ${rows.length} rows: a full year of checks for each, with and without the deduction…`);
+    try {
+      const r = await api('/proposals/calculate', { json: body(s) });
+      if (n === calcSeq.current) { setResult(r); setDirty(!!id); }
+    } catch (e: any) { if (n === calcSeq.current) setErr(e.message); } finally { if (n === calcSeq.current) setBusy(''); }
   };
   const save = async () => {
     setErr(''); setBusy('Saving…');
@@ -120,11 +128,14 @@ export default function ProposalBuilder() {
       else await downloadFile(`/proposals/${id}/export`, name);
     } catch (e: any) { setErr(e.message); } finally { setBusy(''); }
   };
+  // Picking a price shows that price's numbers at once (the analyzer works them out in the browser); every employee's
+  // status and reason are then recalculated in the background.
   const pickProgram = (price: number) => {
     const s = { ...settings, allotmentThreshold: price };
     setSettings(s);
-    calculate(s);
+    void calculate(s, `Updating each employee at ${money(price)} a month…`);
   };
+  const setPrices = (programPrices: number[]) => { setSettings({ ...settings, programPrices }); setDirty(true); };
   const pickClient = (cid: string) => {
     const c = clients.find((x) => x.id === cid);
     setMeta({ ...meta, clientId: cid, name: meta.name || (c ? `${c.name} proposal` : '') });
@@ -309,7 +320,7 @@ export default function ProposalBuilder() {
       )}
       {result && tab === 'results' && (
         <Results result={result} settings={settings} setS={setS} view={view} setView={setView} meta={meta} busy={busy} editable={editable}
-          onSave={save} onDownload={download} onPickProgram={editable ? pickProgram : () => {}} onOverride={setOverride} saveLabel={id ? 'Save changes' : 'Save proposal'} />
+          onSave={save} onDownload={download} onPickProgram={editable ? pickProgram : () => {}} onPrices={setPrices} defaultPrices={defaults.settings?.programPrices} onOverride={setOverride} saveLabel={id ? 'Save changes' : 'Save proposal'} />
       )}
       {result && tab === 'client' && <ClientPage publicEmployer={!!result?.summary?.retirement} id={id} dirty={dirty} repeats={result.settings.dedupe ? 0 : result.summary.duplicates?.length ?? 0} reportSettings={reportSettings} setReportSettings={(r: any) => { setReportSettings(r); setDirty(true); }} onSave={save} canShare={can('proposals.share')} editable={editable} />}
       {result && tab === 'history' && id && <History id={id} onLoad={(s: any) => { setSettings({ ...settings, ...s }); setTab('results'); void calculate({ ...settings, ...s }); }} editable={editable} />}
@@ -317,7 +328,7 @@ export default function ProposalBuilder() {
   );
 }
 
-function Results({ result, settings, setS, view, setView, meta, busy, onSave, onDownload, onPickProgram, onOverride, editable, saveLabel }: any) {
+function Results({ result, settings, setS, view, setView, meta, busy, onSave, onDownload, onPickProgram, onPrices, defaultPrices, onOverride, editable, saveLabel }: any) {
   const s = result.summary;
   const [filter, setFilter] = useState('');
   const [stateF, setStateF] = useState('');
@@ -353,13 +364,11 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
   const pages = Math.max(1, Math.ceil(shown.length / 25));
   const tot = (f: (e: any) => number | undefined) => shown.reduce((a: number, e: any) => a + (f(e) ?? 0), 0);
   const pt = result.employees.filter((e: any) => e.partTime?.eligible);
-  const best = s.programs.reduce((a: any, p: any) => (!a || p.annualMargin > a.annualMargin ? p : a), undefined);
   const dist = s.allotmentDistribution;
   const distTotal = dist.below + dist.near + dist.atOrAbove || 1;
   const csv = () => {
-    const lines = [['Row', ...cols.map((c) => c[1]), 'PT allotment', 'Reason', 'Flags', 'Status for the client', 'Why', 'What would change it'].join(','), ...shown.map((e: any) => [e.row.rowNumber, ...cols.map((c) => c[2](e) ?? ''), e.partTime?.allotment ?? '', e.reasons.join(' '), e.flags.join(' '), e.explanation ? [e.explanation.status, e.explanation.headline].filter(Boolean).join(': ') : '', e.explanation?.reason ?? '', (e.explanation?.suggestions ?? []).join(' ')].map((v) => `"${String(v).replace(/"/g, '""')}"`).join(','))];
-    const url = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
-    Object.assign(document.createElement('a'), { href: url, download: `${meta.name || 'proposal'} results.csv` }).click();
+    const lines = [['Row', ...cols.map((c) => c[1]), 'PT allotment', 'Reason', 'Flags', 'Status for the client', 'Why', 'What would change it'], ...shown.map((e: any) => [e.row.rowNumber, ...cols.map((c) => c[2](e) ?? ''), e.partTime?.allotment ?? '', e.reasons.join(' '), e.flags.join(' '), e.explanation ? [e.explanation.status, e.explanation.headline].filter(Boolean).join(': ') : '', e.explanation?.reason ?? '', (e.explanation?.suggestions ?? []).join(' ')])];
+    saveBlob(csvFile(lines), `${meta.name || 'proposal'} results.csv`);
   };
 
   return (
@@ -397,18 +406,7 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
 
       {view === 'results' && (
         <>
-          <div className="panel">
-            <h3>Margin strategy analyzer</h3><div className="fg-note">Click a program to see eligibility at that price point. Margin = price − {s.benefitPackage?.name} benefit cost ({money(s.benefitPackage?.monthlyCost)}) per eligible employee per month.</div>
-            <div className="fg-tablebox"><table>
-              <thead><tr><th>Program</th><th className="num">Eligible</th><th className="num">Monthly revenue</th><th className="num">Benefit cost</th><th className="num">Margin %</th><th className="num">12-month margin</th></tr></thead>
-              <tbody>{s.programs.map((p: any) => (
-                <tr key={p.price} className={p.price === result.settings.allotmentThreshold ? 'fg-sel' : undefined} style={{ cursor: 'pointer' }} onClick={() => onPickProgram(p.price)}>
-                  <td><b>{money(p.price)}</b> {p.price === result.settings.allotmentThreshold && <span className="badge b-primary">Current</span>} {best?.price === p.price && <span className="badge b-green">Best margin</span>}</td>
-                  <td className="num">{p.eligible}</td><td className="num">{money(p.monthlyRevenue)}</td><td className="num">{money(p.monthlyBenefitCost)}</td><td className="num">{pctf(p.marginPercent)}</td><td className="num">{money(p.annualMargin)}</td>
-                </tr>
-              ))}</tbody>
-            </table></div>
-          </div>
+          <MarginAnalyzer result={result} settings={settings} onPick={onPickProgram} onPrices={onPrices} defaultPrices={defaultPrices} editable={editable} busy={busy} />
 
           <div className="kpis">
             <div className="kpi"><div className="l">Eligible employees</div><div className="v">{s.eligibleTotal} <span className="s" style={{ fontSize: '1rem' }}>of {s.employees}</span></div>
@@ -535,6 +533,78 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
         </div>
       )}
     </>
+  );
+}
+
+/**
+ * Margin strategy analyzer. Each row is a program price; click one to make it the proposal's price. The table, the
+ * selected price's numbers and the best-margin mark are worked out in the browser from the employees already
+ * calculated, so they change the moment a price is picked or typed; each employee's status then updates in the background.
+ */
+function MarginAnalyzer({ result, settings, onPick, onPrices, defaultPrices, editable, busy }: any) {
+  const [draft, setDraft] = useState<string[] | null>(null);
+  const pkg = settings.benefitPackages?.find((p: any) => p.id === settings.benefitPackageId) ?? result.summary.benefitPackage;
+  const cost: number = pkg?.monthlyCost ?? 0;
+  const review: number = result.settings.needsReviewAllotment;
+  const saved: number[] = settings.programPrices ?? result.settings.programPrices ?? [];
+  const prices = draft ? cleanPrices(draft) : saved;
+  const key = prices.join(',');
+  const rows = useMemo(() => analyzePrograms(result.employees, prices, cost, review), [result.employees, key, cost, review]);
+  const chosen: number = settings.allotmentThreshold;
+  const applied: number = result.settings.allotmentThreshold;
+  const sel = rows.find((r) => r.price === chosen) ?? analyzePrograms(result.employees, [chosen], cost, review)[0];
+  const best = rows.reduce<(typeof rows)[number] | undefined>((a, p) => (!a || p.annualMargin > a.annualMargin ? p : a), undefined);
+  const updating = chosen !== applied;
+  const pick = (price: number) => { if (editable && !draft && price !== chosen) onPick(price); };
+  const setAt = (i: number, v: string) => setDraft((d) => (d ?? []).map((x, j) => (j === i ? v : x)));
+  const done = () => { const next = cleanPrices(draft ?? []); if (next.length) onPrices(next); setDraft(null); };
+  const lowest = draft ? cleanPrices(draft).at(-1) : undefined;
+
+  return (
+    <div className="panel">
+      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'baseline' }}>
+        <h3 style={{ margin: 0 }}>Margin strategy analyzer</h3>
+        {editable && !draft && <button className="small" onClick={() => setDraft(saved.map(String))}>Edit prices</button>}
+      </div>
+      <p style={{ margin: '8px 0' }}>
+        At <b>{money(sel.price)}</b> a month, <b>{sel.eligible}</b> {sel.eligible === 1 ? 'employee qualifies' : 'employees qualify'} on the full plan:{' '}
+        <b>{money(sel.monthlyRevenue)}</b> revenue and <b>{money(sel.monthlyMargin)}</b> margin a month ({pctf(sel.marginPercent)}), <b>{money(sel.annualMargin)}</b> over 12 months.
+        {updating && <span className="muted small"> {busy ? 'Updating each employee at this price…' : 'Calculate again to update each employee at this price.'}</span>}
+      </p>
+      <div className="fg-note">{editable ? 'Click a price to use it for this proposal. ' : ''}Margin = price − {pkg?.name} benefit cost ({money(cost)}) per eligible employee per month. Counts are employees who pass every other rule and whose savings reach the price.</div>
+      {draft && (
+        <div className="row" style={{ alignItems: 'flex-end', marginTop: 10 }}>
+          {draft.map((v, i) => (
+            <label key={i} style={{ width: 'auto' }}>Price {i + 1} ($)
+              <span className="row" style={{ gap: 4, flexWrap: 'nowrap', alignItems: 'center' }}>
+                <input style={{ width: 96 }} type="number" min={1} max={5000} step="1" value={v} onChange={(e) => setAt(i, e.target.value)} aria-label={`Program price ${i + 1}`} />
+                <button className="small" title="Remove this price" aria-label={`Remove price ${i + 1}`} disabled={draft.length <= 1} onClick={() => setDraft(draft.filter((_, j) => j !== i))}>×</button>
+              </span>
+            </label>
+          ))}
+          <button className="small" disabled={draft.length >= 12} onClick={() => setDraft([...draft, String(Math.max(1, (lowest ?? 139) - 10))])}>Add a price</button>
+          {defaultPrices?.length > 0 && <button className="small" onClick={() => setDraft(defaultPrices.map(String))}>Reset to {defaultPrices.map((p: number) => money(p).replace('.00', '')).join(', ')}</button>}
+          <button className="small primary" disabled={!cleanPrices(draft).length} onClick={done}>Done</button>
+          <button className="small" onClick={() => setDraft(null)}>Cancel</button>
+        </div>
+      )}
+      {draft && draft.some((v) => !cleanPrices([v]).length) && <div className="err" style={{ marginTop: 8 }}>Prices run from $1 to $5,000 a month. Blank or out-of-range prices are left out.</div>}
+      <div className="fg-tablebox" style={{ marginTop: 10 }}><table>
+        <thead><tr><th>Program</th><th className="num">Eligible</th><th className="num">Monthly revenue</th><th className="num">Benefit cost</th><th className="num">Margin %</th><th className="num">12-month margin</th></tr></thead>
+        <tbody>{rows.map((p) => {
+          const on = p.price === chosen;
+          const clickable = editable && !draft && !on;
+          return (
+            <tr key={p.price} className={on ? 'fg-sel' : undefined} style={{ cursor: clickable ? 'pointer' : undefined }} onClick={() => pick(p.price)}
+              tabIndex={clickable ? 0 : undefined} role={editable ? 'button' : undefined} aria-pressed={editable ? on : undefined}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(p.price); } }}>
+              <td><b>{money(p.price)}</b> {on && <span className="badge b-primary">{updating ? 'Selected' : 'Current'}</span>} {best?.price === p.price && <span className="badge b-green">Best margin</span>}</td>
+              <td className="num">{p.eligible}</td><td className="num">{money(p.monthlyRevenue)}</td><td className="num">{money(p.monthlyBenefitCost)}</td><td className="num">{pctf(p.marginPercent)}</td><td className="num">{money(p.annualMargin)}</td>
+            </tr>
+          );
+        })}</tbody>
+      </table></div>
+    </div>
   );
 }
 

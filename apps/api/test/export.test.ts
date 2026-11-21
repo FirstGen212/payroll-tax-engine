@@ -5,7 +5,7 @@ import { runProposal } from '@pte/engine';
 import type { CensusRow } from '@pte/engine';
 
 vi.mock('../src/db.js', () => ({ pool: {}, q: vi.fn(async () => []) }));
-const { exportWorkbook } = await import('../src/proposals/routes.js');
+const { exportWorkbook, ProgramPrices } = await import('../src/proposals/routes.js');
 
 const base: CensusRow = { rowNumber: 2, employeeId: '1', firstName: 'Pat', lastName: 'Lee', company: 'Acme', workState: 'TX', grossPay: 1000, payFrequency: 'Weekly', hoursPerPeriod: 40, federalFilingStatus: 'Single' };
 const rows: CensusRow[] = [
@@ -79,5 +79,16 @@ describe('proposal export', () => {
     const ws = wb.getWorksheet('Employee allotments')!;
     const head = line(ws, 1) as string[];
     expect([2, 3, 4, 5].map((n) => line(ws, n)[head.indexOf('Status')])).toEqual(['Eligible', 'Eligible', 'Eligible (part-time plan)', 'Not eligible: Low Income']);
+  });
+});
+
+describe('program prices a request may ask for', () => {
+  it('takes up to 12 prices from $1 to $5,000 and refuses the rest, so one request cannot ask for thousands of price points', () => {
+    expect(ProgramPrices.parse([159, 149, 139, 129])).toEqual([159, 149, 139, 129]);
+    expect(ProgramPrices.safeParse(Array(13).fill(100)).success).toBe(false);
+    expect(ProgramPrices.safeParse([]).success).toBe(false);
+    expect(ProgramPrices.safeParse([0]).success).toBe(false);
+    expect(ProgramPrices.safeParse([5001]).success).toBe(false);
+    expect(ProgramPrices.safeParse([Number.NaN]).success).toBe(false);
   });
 });

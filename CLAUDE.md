@@ -7,3 +7,4 @@
 - Engine and data rules: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Every tax rule keeps its verification status and sources.
 - **Every API route needs an access rule** in `requiredPermission` (`apps/api/src/auth.ts`) and a row in the route table in `apps/api/test/auth.test.ts`. Rules match the route pattern, not the URL; a route that changes data without a rule is refused. Hide or disable controls a person has no permission for (`useCan`).
 - **Client-facing pages** (`/r/...`) render through `ReportView` from a published snapshot. They never show the internal app name or anything that is not in the snapshot.
+- **Security**: see [docs/SECURITY.md](docs/SECURITY.md). Response headers live in `apps/api/src/security.ts`; heavy proposal work goes through `heavy.run` so the 512 MB server never runs several large files at once.

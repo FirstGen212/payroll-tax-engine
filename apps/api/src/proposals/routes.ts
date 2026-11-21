@@ -11,16 +11,26 @@ import { audit, can } from '../auth.js';
 import { industryLabel, pickMultiple, sizeLabel } from './multiples-data.js';
 import { DEFAULT_REPORT_SETTINGS, multipleNote, ReportSettingsIn, buildSnapshot, explanationOf, mergeReportSettings, newSlug } from './report.js';
 import { getTaxDb } from '../taxdb.js';
-import { parseWorkbook } from './parse.js';
+import { MAX_COLUMNS, MAX_ROWS_PER_SHEET, parseWorkbook } from './parse.js';
+import { workGate } from '../security.js';
 
 export const STATUSES = ['draft', 'review', 'completed', 'sent', 'won', 'lost'] as const;
 const httpError = (statusCode: number, message: string) => Object.assign(new Error(message), { statusCode });
 
+/** Program prices the margin analyzer compares (dollars a month). */
+export const ProgramPrices = z.array(z.number().finite().min(1, 'A program price must be at least $1.').max(5000, 'A program price must be $5,000 or less.')).min(1, 'Keep at least one program price.').max(12, 'Compare at most 12 program prices.');
+
+/**
+ * Settings are mostly passed through to the engine, which fills in defaults. The parts that set how much work a
+ * calculation does are checked here, so one request cannot ask for thousands of price points.
+ */
+const Settings = z.object({ programPrices: ProgramPrices.optional() }).passthrough();
+
 const Calc = z.object({
-  headers: z.array(z.string()).default([]),
-  rows: z.array(z.record(z.any())),
+  headers: z.array(z.string()).max(MAX_COLUMNS).default([]),
+  rows: z.array(z.record(z.any())).max(MAX_ROWS_PER_SHEET, `A proposal can have at most ${MAX_ROWS_PER_SHEET.toLocaleString()} rows. Split the file and run each part.`),
   mapping: z.record(z.string().nullish()),
-  settings: z.record(z.any()).default({}),
+  settings: Settings.default({}),
 });
 
 const Save = Calc.extend({
@@ -70,7 +80,17 @@ export async function withTableMultiple(settings: Partial<ProposalSettings>): Pr
   return { ...rest, ebitdaMultiple: row.multiple, multipleInfo: { industry: industryLabel(rest.industry)!, size: row.sizeBand === 'all' ? null : sizeLabel(row.sizeBand)?.short ?? null, ownership, basis: row.basis, source: row.source, asOf: row.asOf, method: row.method } };
 }
 
+/**
+ * Proposal calculations, file reads and workbooks are the heavy work: two run at a time and up to 20 wait their turn,
+ * so a burst of large files queues instead of running the server out of memory.
+ */
+export const heavy = workGate(2, 20);
+
 export async function calculate(body: z.infer<typeof Calc>): Promise<ProposalResult & { unmatchedMunicipalities: string[] }> {
+  return heavy.run(() => calculateNow(body));
+}
+
+async function calculateNow(body: z.infer<typeof Calc>): Promise<ProposalResult & { unmatchedMunicipalities: string[] }> {
   const db = await getTaxDb();
   const rows = rowsFromSheet(body.rows, body.mapping as any);
   matchLocals(rows, db);
@@ -230,9 +250,11 @@ export async function proposalRoutes(app: FastifyInstance) {
     eligibilityOrder: ELIGIBILITY_ORDER,
   }));
 
-  app.post('/api/proposals/parse', async (req) => {
-    const b = z.object({ fileName: z.string(), base64: z.string() }).parse(req.body);
-    const sheets = await parseWorkbook(b.fileName, Buffer.from(b.base64, 'base64')).catch((e) => {
+  // A 15 MB spreadsheet is about 20 MB once encoded for upload; larger files are refused before they are read.
+  app.post('/api/proposals/parse', { bodyLimit: 21 * 1024 * 1024 }, async (req) => {
+    const b = z.object({ fileName: z.string().max(260), base64: z.string() }).parse(req.body);
+    const sheets = await heavy.run(() => parseWorkbook(b.fileName, Buffer.from(b.base64, 'base64'))).catch((e) => {
+      if (e?.statusCode === 503) throw e;
       req.log.warn(e, 'could not read the uploaded file');
       throw httpError(400, 'That file could not be read. Upload an .xlsx or .csv file (an old .xls needs to be saved as .xlsx first).');
     });
@@ -247,7 +269,7 @@ export async function proposalRoutes(app: FastifyInstance) {
   app.post('/api/proposals/export', async (req, reply) => {
     const b = Calc.extend({ name: z.string().default('Proposal') }).parse(req.body);
     const result = await calculate(b);
-    const buf = await exportWorkbook(b.name, b.headers, b.rows, b.mapping, result);
+    const buf = await heavy.run(() => exportWorkbook(b.name, b.headers, b.rows, b.mapping, result));
     reply.header('content-type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     reply.header('content-disposition', `attachment; filename="${b.name.replace(/[^\w .-]/g, '')} - Employee allotments.xlsx"`);
     return reply.send(buf);
@@ -279,12 +301,13 @@ export async function proposalRoutes(app: FastifyInstance) {
   app.get('/api/report-defaults', async () => DEFAULT_REPORT_SETTINGS);
 
   const save = async (req: FastifyRequest, b: z.infer<typeof Save>, id?: string, event = id ? 'proposal.save' : 'proposal.create') => {
+    // Check the person may change this proposal before doing the work of calculating it.
+    const before = id ? await load(req, id) : undefined;
     const result = await calculate(b);
     const summary = { ...result.summary, unmatchedMunicipalities: result.unmatchedMunicipalities };
     const vals = [b.name, b.clientId ?? null, b.company ?? null, b.fileName ?? null, b.sheetName ?? null, JSON.stringify(b.headers), JSON.stringify(b.rows), JSON.stringify(b.mapping), JSON.stringify(result.settings), JSON.stringify(summary), JSON.stringify(result.employees), b.status, b.notes ?? null, JSON.stringify(b.reportSettings ?? {})];
     let pid = id;
-    if (id) {
-      const before = await load(req, id);
+    if (id && before) {
       await q(`update proposal set name=$1, client_id=$2, company=$3, file_name=$4, sheet_name=$5, headers=$6, raw_rows=$7, mapping=$8, settings=$9, summary=$10, results=$11, status=$12, notes=$13, report_settings=$14,
           completed_at = case when $12 = 'completed' and status <> 'completed' then now() else completed_at end, updated_at=now() where id=$15`, [...vals, id]);
       if (before.status !== b.status) await audit(req, 'proposal.status', b.name, { proposal: id, from: before.status, to: b.status });
@@ -383,7 +406,7 @@ export async function proposalRoutes(app: FastifyInstance) {
   app.get('/api/proposals/:id/export', async (req, reply) => {
     const p = await load(req, (req.params as any).id);
     const result = { settings: p.settings, employees: p.results, summary: p.summary } as ProposalResult;
-    const buf = await exportWorkbook(p.name, p.headers, p.raw_rows, p.mapping, result);
+    const buf = await heavy.run(() => exportWorkbook(p.name, p.headers, p.raw_rows, p.mapping, result));
     reply.header('content-type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     reply.header('content-disposition', `attachment; filename="${String(p.name).replace(/[^\w .-]/g, '')} - Employee allotments.xlsx"`);
     return reply.send(buf);
