@@ -252,8 +252,8 @@ export interface ProposalSettings {
   overrides: Record<string, EmployeeOverride>;
 }
 
-/** What the virtual-care-only package costs First Gen per enrollee per month. Placeholder until Evan confirms the number. */
-export const VIRTUAL_CARE_MONTHLY_COST = 0;
+/** What the virtual-care-only package costs First Gen per enrollee per month. Internal: never shown to clients. */
+export const VIRTUAL_CARE_MONTHLY_COST = 10;
 
 export const DEFAULT_PROPOSAL_SETTINGS: ProposalSettings = {
   year: 2027,
