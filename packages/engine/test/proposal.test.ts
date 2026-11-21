@@ -44,10 +44,29 @@ describe('proposal tool', () => {
       'NEEDS REVIEW',
       'NEEDS REVIEW',
     ]);
-    expect(r.employees[4].flags[0]).toMatch(/No federal income tax/);
+    // The file says no federal tax, but the engine calculates it from the W-4 and pay: the engine wins.
+    expect(r.employees[4].flags.some((f) => /Sheet says no federal tax is withheld, but the engine calculates/.test(f))).toBe(true);
     expect(r.employees[6].reasons[0]).toMatch(/review threshold/);
     const strict = runProposal([rows[4]], { ...std, noFederalTaxAs: 'status' }, db);
-    expect(strict.employees[0].eligibility).toBe('No Federal Taxes Paid');
+    expect(strict.employees[0].eligibility).toBe('Eligible');
+  });
+
+  it('decides "no federal tax" from its own calculation, not the file\'s yes/no column', () => {
+    // $300 a week, Single: no federal income tax under the 2027 tables, whatever the file says
+    const low: CensusRow = { ...base, grossPay: 300, hoursPerPeriod: 30 };
+    for (const federalTaxPaid of [true, false, null]) {
+      const e = runProposal([{ ...low, federalTaxPaid }], { ...std, deductionPerCheck: 250, allotmentThreshold: 149, lowIncomeMax: 0, noFederalTaxAs: 'status', partTime: { enabled: false } as any }, db).employees[0];
+      expect(e.annual!.before.fit).toBe(0);
+      expect(e.eligibility).toBe('Not Eligible - Insufficient Savings + No Federal Taxes Paid');
+    }
+  });
+
+  it('tries the part-time plan even when the file says no federal tax is withheld', () => {
+    const pt = { enabled: true, deductionPerCheck: 180, allotmentThreshold: 50, maxHoursPerWeek: 29, maxAnnualGross: 20000 };
+    const row: CensusRow = { ...base, grossPay: 1000, hoursPerPeriod: 20, federalTaxPaid: false };
+    const e = runProposal([row], { ...std, allotmentThreshold: 500, partTime: pt }, db).employees[0];
+    expect(e.eligibility).toBe('PT Eligible');
+    expect(e.partTime!.eligible).toBe(true);
   });
 
   it('savings below the allotment threshold are insufficient; the price analyzer counts each price point', () => {
@@ -88,7 +107,7 @@ describe('proposal tool', () => {
   });
 
   it('parses statuses, frequencies and schedules', () => {
-    expect(parseFederalStatus('Single or Married filing separately')).toBe('mfs');
+    expect(parseFederalStatus('Single or Married filing separately')).toBe('single');
     expect(parseFederalStatus('Married filing jointly or Qualifying widow(er)')).toBe('mfj');
     expect(parseFederalStatus('Head of Household')).toBe('hoh');
     expect(parseFrequency('Bi-Weekly')).toBe('biweekly');
@@ -171,7 +190,7 @@ describe('proposal tool', () => {
     expect(pay.suggestions[0]).toMatch(/^Would qualify at about \$[\d,]+ per check, \$[\d,]+ more than today\./);
 
     const credits = runProposal([{ ...base, dependentCredits: 6000 }], { ...std, partTime: off }, db).employees[0];
-    expect(credits.eligibility).toBe('Not Eligible - Insufficient Savings');
+    expect(credits.eligibility).toBe('Not Eligible - Insufficient Savings + No Federal Taxes Paid');
     expect(credits.explanation!.reason).toMatch(/No federal income tax is withheld from their check today, because their W-4 claims \$6,000 a year in dependent credits\./);
 
     const single = runProposal([base], { ...std, allotmentThreshold: 120, partTime: off }, db).employees[0];
@@ -257,7 +276,7 @@ describe('Texas TRS payroll model', () => {
   });
 
   it('explains a no-Social-Security shortfall in plain words', () => {
-    const e = runProposal([{ ...base, grossPay: 600, federalTaxPaid: false }], { ...trs, allotmentThreshold: 149, lowIncomeMax: 0, partTime: { enabled: false } as any }, db).employees[0];
+    const e = runProposal([{ ...base, grossPay: 600, dependentCredits: 6000 }], { ...trs, allotmentThreshold: 149, lowIncomeMax: 0, partTime: { enabled: false } as any }, db).employees[0];
     expect(e.eligibility).toMatch(/Insufficient Savings/);
     expect(e.explanation!.reason).toMatch(/Medicare tax \(their employer does not take out Social Security\)/);
   });
