@@ -962,7 +962,9 @@ function evaluateRules(row: CensusRow, s: ProposalSettings, db: TaxDatabase): Pr
   // Tier pricing: the tier sets the deduction, unless a reviewer typed one for this person.
   if (s.pricingMode === 'tiers' && !(ov?.deductionPerCheck && ov.deductionPerCheck > 0)) {
     if (useRow) res.flags.push(`The file's First Gen deduction (${usd(row.proposedDeduction!)}) is not used: tier pricing sets each person's deduction.`);
-    enrollInTier(res, { input, freq, gross, otherComp, existing: r2(existing), annualGross, hoursPerPeriod, noFed }, s, db);
+    // "No federal tax" comes from the engine's own withholding before any First Gen deduction, never from the file's yes/no column.
+    const tierNoFed = planCalc(input, freq, gross, 0, s, db).annual.before.fit === 0;
+    enrollInTier(res, { input, freq, gross, otherComp, existing: r2(existing), annualGross, hoursPerPeriod, noFed: tierNoFed }, s, db);
     return applyStatusOverride(res, input, freq, gross, s, db);
   }
 
@@ -1041,7 +1043,7 @@ function enrollInTier(res: ProposalEmployeeResult, c: TierContext, s: ProposalSe
   const fail = (e: Eligibility, why: string, cause: EligibilityCause) => { res.eligibility = e; res.cause = cause; res.reasons.push(why); };
   const tiers = s.tiers.filter((t) => t.enabled).sort((a, b) => b.allotmentCutoff - a.allotmentCutoff || b.monthlyPrice - a.monthlyPrice);
   res.passesNonSavingsRules = c.annualGross > s.lowIncomeMax && !(c.noFed && s.noFederalTaxAs === 'status') && c.hoursPerPeriod !== undefined && c.hoursPerPeriod >= s.minHoursPerPeriod;
-  if (c.noFed && s.noFederalTaxAs === 'warning') res.flags.unshift('⚠ No federal income tax withheld today according to the file.');
+  if (c.noFed && s.noFederalTaxAs === 'warning') res.flags.unshift('⚠ The engine calculates no federal income tax withheld for this W-4 and pay.');
   if (!tiers.length) return fail('NEEDS REVIEW', 'Tier pricing is on but no tier is turned on.', 'reviewer');
   const cap = hceCapReason(res.row, c.annualGross, s);
   const capAt = cap ? tiers.findIndex((t) => t.id === s.hceCap.maxTierId) : -1;
@@ -1076,7 +1078,7 @@ function enrollInTier(res: ProposalEmployeeResult, c: TierContext, s: ProposalSe
     res.reasons.push(`${t.name} tier: ${usd(ded)} per check, allotment ${usd(calc.monthly.allotment)} a month (needs ${usd(t.allotmentCutoff)}), price ${usd(t.monthlyPrice)} a month.`);
     const unv = unverifiedLines(c.input, s, db);
     if (unv.length) res.flags.push(`Uses tax data not yet verified: ${unv.join(', ')}.`);
-    if (c.noFed && s.noFederalTaxAs === 'status') fail('No Federal Taxes Paid', 'No federal income tax is withheld today according to the file; review before enrolling.', 'no-federal-tax');
+    if (c.noFed && s.noFederalTaxAs === 'status') fail('No Federal Taxes Paid', 'The engine calculates no federal income tax withheld for this W-4 and pay; review before enrolling.', 'no-federal-tax');
     else if (calc.monthly.allotment >= s.needsReviewAllotment) fail('NEEDS REVIEW', `Monthly allotment ${usd(calc.monthly.allotment)} is at or above the ${usd(s.needsReviewAllotment)} review threshold.`, 'high-savings');
     else if (c.hoursPerPeriod === undefined) fail('NEEDS REVIEW', 'Hours missing for an hourly employee.', 'hours-missing');
     else if (s.reviewMinConfidence > 0 && res.row.confidence !== undefined && res.row.confidence < s.reviewMinConfidence) fail('NEEDS REVIEW', `Data confidence ${res.row.confidence} is below ${s.reviewMinConfidence}.`, 'confidence');

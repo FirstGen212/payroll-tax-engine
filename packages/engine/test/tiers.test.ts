@@ -43,6 +43,14 @@ describe('tier pricing', () => {
     expect(r.employees[0].explanation?.status).toBe('Eligible (Plus)');
   });
 
+  it('decides "no federal tax" from the engine, not the file\'s yes/no column', () => {
+    for (const federalTaxPaid of [true, false, null]) {
+      const e = runProposal([row('1', 3000, { federalTaxPaid })], { ...tiers, noFederalTaxAs: 'status' }, db).employees[0];
+      expect(e.eligibility).not.toBe('No Federal Taxes Paid');
+      expect(e.tier?.id).toBe('plus');
+    }
+  });
+
   it('cutoffs are editable: raising Plus\'s cutoff moves the same person down a tier', () => {
     const p = row('1', 1500);
     const before = runProposal([p], tiers, db).employees[0];
