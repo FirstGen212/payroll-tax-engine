@@ -8,7 +8,7 @@ services:
     buildCommand: npm ci --include=dev && npm run build -w apps/web && npm run build -w apps/api
     # The app is compiled to plain JavaScript and run by node alone, which keeps it well inside the plan's 512 MB.
     # On start it creates/updates the schema and loads the tax database (safe to re-run; client data is kept).
-    startCommand: node apps/api/dist/server.js
+    startCommand: node --max-old-space-size=400 apps/api/dist/server.js
     healthCheckPath: /api/health
     autoDeploy: true
     envVars:

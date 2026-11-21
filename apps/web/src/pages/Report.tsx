@@ -7,6 +7,7 @@ const whole = (n?: number) => (n === undefined || n === null ? '—' : Number(n)
 const COLS: Record<string, [string, (e: any) => string, boolean?]> = {
   state: ['State', (e) => e.state ?? ''],
   plan: ['Plan', (e) => e.plan],
+  inPerson: ['In-Person Preventative', (e) => (e.inPersonPreventative === undefined ? '' : e.inPersonPreventative ? 'Yes' : 'No')],
   deduction: ['Pre-tax deduction per check', (e) => money(e.deductionPerCheck), true],
   employeeSavings: ['Employee savings per month', (e) => money(e.employeeMonthlySavings), true],
   employerSavings: ['Employer savings per year', (e) => money(e.employerAnnualSavings), true],
@@ -16,6 +17,12 @@ const COLS: Record<string, [string, (e: any) => string, boolean?]> = {
 /** With add-ons chosen, the surplus column shows what is left after them, next to their cost. */
 const columnsFor = (r: any): string[] => (r.employeeColumns ?? []).flatMap((c: string) => (c === 'voluntary' && r.addOns?.length ? ['addOns', 'voluntary'] : [c]));
 const colLabel = (r: any, c: string) => (c === 'voluntary' && r.addOns?.length ? 'Surplus after add-ons per month' : c === 'addOns' && r.addOns?.length ? `${r.addOns.map((a: any) => a.name).join(' + ')} per month` : COLS[c]?.[0]);
+
+/** ", and In-Person Preventative for the N whose savings cover it" when the proposal offers it. */
+const inPersonNote = (r: any) => {
+  const a = r.addOns?.find((x: any) => x.id === 'mec');
+  return a ? `, plus ${a.name}${a.enrolled !== undefined ? ` for the ${a.enrolled} whose savings cover it` : ''}` : '';
+};
 
 const TONE_BADGE: Record<string, string> = { eligible: 'b-ok', partTime: 'b-ok', review: 'b-warn', notEligible: 'b-neutral' };
 /** Links published before statuses existed list only eligible employees and carry no tone. */
@@ -55,13 +62,13 @@ function Employees({ r }: { r: any }) {
           <h3>{plural(r.eligible, 'eligible employee')}</h3>
           {r.plans?.length
             ? <>
-                <p className="fg-note">Each eligible employee is placed in the plan their tax savings support. Each plan pays for a preventative care benefit with a pre-tax deduction, so both their taxes and the company's go down.</p>
+                <p className="fg-note">Each eligible employee is placed in the plan their tax savings support. Every plan includes virtual care{inPersonNote(r)}, paid with a pre-tax deduction, so both their taxes and the company's go down.</p>
                 <div className="fg-tablebox" style={{ marginBottom: 12 }}><table>
                   <thead><tr><th>Plan</th><th className="num">Employees</th><th className="num">Price a month</th><th>Benefit</th></tr></thead>
                   <tbody>{r.plans.map((p: any) => <tr key={p.name}><td>{p.name}</td><td className="num">{p.employees}</td><td className="num">{money(p.monthlyPrice)}</td><td>{p.benefitPackage}</td></tr>)}</tbody>
                 </table></div>
               </>
-            : <p className="fg-note">{r.eligibleFull} on the full plan{r.eligiblePartTime ? ` and ${r.eligiblePartTime} on the part-time plan` : ''}. Each pays for a {r.benefitPackage ?? 'preventative care'} benefit with a pre-tax deduction, so both their taxes and the company's go down.</p>}
+            : <p className="fg-note">{r.eligibleFull} on the full plan{r.eligiblePartTime ? ` and ${r.eligiblePartTime} on the part-time plan` : ''}. Each gets virtual care{inPersonNote(r)}, paid with a pre-tax deduction, so both their taxes and the company's go down.</p>}
           {r.showEmployees === 'counts' || all.length === 0 ? (
             <div className="fg-tablebox"><table><tbody>
               {r.byReason

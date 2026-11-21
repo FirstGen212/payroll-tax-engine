@@ -84,7 +84,8 @@ export async function withTableMultiple(settings: Partial<ProposalSettings>): Pr
  * Proposal calculations, file reads and workbooks are the heavy work: two run at a time and up to 20 wait their turn,
  * so a burst of large files queues instead of running the server out of memory.
  */
-export const heavy = workGate(2, 20);
+// One at a time: the work is CPU-bound, so a second run gains no speed, and two large files at once can pass 512 MB.
+export const heavy = workGate(1, 20);
 
 export async function calculate(body: z.infer<typeof Calc>): Promise<ProposalResult & { unmatchedMunicipalities: string[] }> {
   return heavy.run(() => calculateNow(body));
@@ -109,6 +110,9 @@ const TONE_RANK = { eligible: 0, partTime: 1, review: 2, notEligible: 3 } as con
  * One row per employee: where they stand, the plan and deduction, and the savings allotment.
  * Amounts in the allotment and savings columns are filled only for people on a plan, so the totals row adds up to the proposal.
  */
+/** Whether this employee has the In-Person Preventative (MEC) add-on on top of their plan. */
+const inPerson = (e: { voluntary?: { addOns: { id: string }[] } }) => !!e.voluntary?.addOns.some((a) => a.id === 'mec');
+
 function allotmentSheet(wb: ExcelJS.Workbook, result: ProposalResult): void {
   const usd = '"$"#,##0.00';
   const ws = wb.addWorksheet('Employee allotments');
@@ -116,7 +120,7 @@ function allotmentSheet(wb: ExcelJS.Workbook, result: ProposalResult): void {
     ['Employee', 28, ''], ['Employee ID', 14, ''], ['Company', 24, ''], ['State', 8, ''], ['Pay schedule', 16, ''], ['Gross per check', 16, 'usd'],
     ['Status', 26, ''], ['Plan', 12, ''], ['Pre-tax deduction per check', 18, 'usd'], ['Employee tax savings per month', 18, 'usd'],
     ['Savings allotment per month', 18, 'usd'], ['Savings allotment per year', 18, 'usd'], ['Employer tax savings per month', 18, 'usd'], ['Employer tax savings per year', 18, 'usd'],
-    ['Add-ons per month', 14, 'usd'], ['Voluntary benefit surplus per month', 18, 'usd'],
+    ['Add-ons per month', 14, 'usd'], ['Voluntary benefit surplus per month', 18, 'usd'], ['In-Person Preventative', 14, ''],
     ['Allotment on the full plan (calculated)', 20, 'usd'], ['Why', 70, 'wrap'], ['What would change it', 60, 'wrap'], ['Row in file', 10, ''],
   ];
   const head = ws.addRow(columns.map((c) => c[0]));
@@ -136,7 +140,7 @@ function allotmentSheet(wb: ExcelJS.Workbook, result: ProposalResult): void {
       x.headline ? `${x.status}: ${x.headline}` : x.status, m ? (pt ? 'Part-time' : e.tier?.name ?? 'Full') : '',
       m ? (pt ? e.partTime!.deductionPerCheck : e.deductionPerCheck) : undefined, m?.employeeTaxSavings,
       m?.allotment, m ? Math.round(m.allotment * 12 * 100) / 100 : undefined, m?.employerTaxSavings, m ? Math.round(m.employerTaxSavings * 12 * 100) / 100 : undefined,
-      m && e.voluntary ? e.voluntary.addOnCost : undefined, m ? e.voluntary?.surplus : undefined,
+      m && e.voluntary ? e.voluntary.addOnCost : undefined, m ? e.voluntary?.surplus : undefined, m && e.voluntary ? (inPerson(e) ? 'Yes' : 'No') : '',
       e.monthly?.allotment, x.tone === 'eligible' ? '' : x.reason, x.suggestions.join(' '), e.row.rowNumber,
     ]);
   }

@@ -40,6 +40,12 @@ function toBase64(file: File): Promise<string> {
   });
 }
 
+/** A saved proposal's packages plus any default package added since it was saved (such as virtual care only). */
+function withDefaultPackages(saved: any[] | undefined, defaults: any[] = []) {
+  if (!saved?.length) return structuredClone(defaults);
+  return [...defaults.map((d) => ({ ...d, ...(saved.find((p) => p.id === d.id) ?? {}) })), ...saved.filter((p) => !defaults.some((d) => d.id === p.id))];
+}
+
 export default function ProposalBuilder() {
   const { id } = useParams();
   const nav = useNavigate();
@@ -75,7 +81,7 @@ export default function ProposalBuilder() {
         setReportSettings(p.report_settings);
         setHeaders(p.headers); setRows(p.raw_rows); setMapping(p.mapping); setSheetName(p.sheet_name ?? '');
         setFile({ fileName: p.file_name, sheets: [] });
-        setSettings({ ...structuredClone(d.settings), ...p.settings, partTime: { ...d.settings.partTime, ...(p.settings.partTime ?? {}) } });
+        setSettings({ ...structuredClone(d.settings), ...p.settings, partTime: { ...d.settings.partTime, ...(p.settings.partTime ?? {}) }, benefitPackages: withDefaultPackages(p.settings.benefitPackages, d.settings.benefitPackages) });
         if (p.summary?.programs) setResult({ settings: p.settings, employees: p.results, summary: p.summary, unmatchedMunicipalities: p.summary?.unmatchedMunicipalities ?? [] });
       }).catch((e) => setErr(e.message));
     });
@@ -250,6 +256,8 @@ export default function ProposalBuilder() {
           <div style={{ marginTop: 12 }}>
             <label>Benefit package (preventative care tier applied to benefit cost)</label>
             <div className="seg" style={{ marginTop: 6 }}>{settings.benefitPackages.map((p: any) => <button key={p.id} className={settings.benefitPackageId === p.id ? 'on' : ''} onClick={() => setS({ benefitPackageId: p.id })}>{p.name} ({money(p.monthlyCost)})</button>)}</div>
+            <p className="small muted" style={{ margin: '8px 0 4px' }}>Every package includes virtual care. Package cost per enrollee per month, taken off the price for the margin:</p>
+            <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>{settings.benefitPackages.map((p: any, i: number) => <label key={p.id} className="small">{p.name}<input type="number" min={0} step="0.01" style={{ width: 96 }} value={p.monthlyCost} onChange={(e) => setS({ benefitPackages: settings.benefitPackages.map((q: any, j: number) => (j === i ? { ...q, monthlyCost: Math.max(0, num(e.target.value)) } : q)) })} /></label>)}</div>
             <div className="grid2" style={{ marginTop: 12 }}>
               <label>Monthly allotment threshold: minimum monthly allotment required ($)<input type="number" value={settings.allotmentThreshold} onChange={(e) => setS({ allotmentThreshold: num(e.target.value) })} /></label>
               <label>Low income threshold: annual gross at or below this is low income ($)<input type="number" value={settings.lowIncomeMax} onChange={(e) => setS({ lowIncomeMax: num(e.target.value) })} /></label>
@@ -301,14 +309,14 @@ export default function ProposalBuilder() {
             <div className="row" style={{ alignItems: 'flex-end' }}>
               {vols.map((v, i) => (
                 <span key={v.id} className="row" style={{ alignItems: 'flex-end', gap: 6 }}>
-                  <label className="check"><input type="checkbox" checked={!!v.selected} onChange={(e) => setVol(i, { selected: e.target.checked })} />Add {v.name}</label>
+                  <label className="check"><input type="checkbox" checked={!!v.selected} onChange={(e) => setVol(i, { selected: e.target.checked })} />Add {v.name}{v.onlyIfAffordable ? ' where savings cover it' : ''}</label>
                   <label>{v.name} a month ($)<input style={{ width: 90 }} type="number" step="1" value={v.monthlyCost} onChange={(e) => setVol(i, { monthlyCost: num(e.target.value) })} /></label>
                 </span>
               ))}
               <label>Employer admin fee ($)<input style={{ width: 110 }} type="number" step="0.01" min={0} placeholder="None" value={adminFee.amount || ''} onChange={(e) => setS({ adminFee: { ...adminFee, amount: Math.max(0, num(e.target.value)) } })} /></label>
               <label>Charged<select value={adminFee.per} onChange={(e) => setS({ adminFee: { ...adminFee, per: e.target.value } })}><option value="employee-month">per enrolled employee a month</option><option value="month">as one amount a month</option></select></label>
             </div>
-            <p className="muted small" style={{ margin: '6px 0 0' }}>Each enrolled employee's savings left after the plan price show as their voluntary benefit surplus; a chosen add-on comes out of that. The admin fee comes out of the employer's savings, and the valuation uses what is left.</p>
+            <p className="muted small" style={{ margin: '6px 0 0' }}>Every plan and tier is virtual care. In-Person Preventative goes on top for each employee whose savings cover the plan price plus its cost (for example $159 + $55); the others keep virtual care alone. Each enrolled employee's savings left after the plan price show as their voluntary benefit surplus; a chosen add-on comes out of that. The admin fee comes out of the employer's savings, and the valuation uses what is left.</p>
             <h3>Part-time plan</h3>
             {tierMode && <p className="muted small" style={{ margin: '0 0 8px' }}>Not used while tier pricing is on.</p>}
             <div className="row">
@@ -402,6 +410,7 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
     ['tb', 'Tax (pre-First Gen)', (e) => e.perPeriod?.taxBefore, 'money'], ['ta', 'Tax (PP)', (e) => e.perPeriod?.taxAfter, 'money'], ['allot', 'Mo. allotment', (e) => e.monthly?.allotment, 'money'],
     ['eff', 'Eff. rate', (e) => e.perPeriod?.effectiveRate, 'pct'], ['elig', 'Eligibility', (e) => e.eligibility, 'text'],
     ['vol', s.voluntary?.addOns?.length ? 'Surplus after add-ons' : 'Vol. benefit surplus', (e: any) => e.voluntary?.surplus, 'money'] as [string, string, (e: any) => any, 'money'],
+    ...(s.voluntary?.addOns?.some((a: any) => a.id === 'mec') ? [['ipp', 'In-Person Preventative', (e: any) => (e.voluntary ? (e.voluntary.addOns.some((a: any) => a.id === 'mec') ? 'Yes' : 'No') : undefined), 'text'] as [string, string, (e: any) => any, 'text']] : []),
     ...(result.settings.pricingMode === 'tiers' ? [['tier', 'Tier', (e: any) => (e.eligibility === 'Eligible' ? e.tier?.name : undefined), 'text'] as [string, string, (e: any) => any, 'text']] : []),
   ];
   const states = useMemo(() => [...new Set(result.employees.map((e: any) => e.row.workState).filter(Boolean))].sort() as string[], [result]);
@@ -503,7 +512,7 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
                 <tr><td>Employer payroll tax savings per year</td><td className="num">{money(s.employerAnnualSavings.total)}</td></tr>
                 <tr><td>Admin fee per year{s.adminFee?.annual > 0 ? ` (${money(s.adminFee.amount)} ${s.adminFee.per === 'month' ? 'a month' : 'per enrolled employee a month'})` : ''}</td><td className="num">{s.adminFee?.annual > 0 ? `−${money(s.adminFee.annual)}` : <span className="muted">None set</span>}</td></tr>
                 <tr className="fg-all"><td><b>Remaining employer savings per year</b></td><td className="num"><b>{money(s.employerNetAnnualSavings ?? s.employerAnnualSavings.total)}</b></td></tr>
-                {s.voluntary.addOns.length > 0 && <tr><td>Add-ons per enrolled employee a month ({s.voluntary.addOns.map((a: any) => `${a.name} ${money(a.monthlyCost)}`).join(' + ')})</td><td className="num">{money(s.voluntary.addOnMonthlyCost)}</td></tr>}
+                {s.voluntary.addOns.map((a: any) => <tr key={a.id}><td>{a.name} at {money(a.monthlyCost)} a month{a.onlyIfAffordable ? ', for those whose savings cover it' : ''}</td><td className="num">{a.enrolled ?? '—'} enrolled</td></tr>)}
                 <tr><td>{s.voluntary.addOns.length ? 'Employee savings left after the plan price and add-ons, a month' : 'Voluntary benefit surplus a month (employee savings left after the plan price)'}</td><td className="num">{money(s.voluntary.surplusMonthly)}</td></tr>
                 {s.voluntary.shortfalls > 0 && <tr><td colSpan={2}><span className="badge b-warn">{s.voluntary.shortfalls} short</span> {s.voluntary.shortfalls === 1 ? 'employee does' : 'employees do'} not save enough to cover the add-ons on top of the plan price.</td></tr>}
               </tbody></table></div>
@@ -601,7 +610,7 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
             {[['Employees reviewed', s.employees], ['Eligible employees', `${s.eligibleTotal}`], ['Estimated employer savings per year', money(s.employerAnnualSavings.total)], ...(s.adminFee?.annual > 0 ? [['Employer savings after admin fee', money(s.employerNetAnnualSavings)]] : []), ...(s.retirement ? [] : [['Estimated valuation increase', money(s.valuationIncrease)]])].map(([l, v]) => <div key={l} className="kpi"><div className="l">{l}</div><div className="v">{v}</div></div>)}
           </div>
           <h3>How it works</h3>
-          <p>Eligible employees enroll in a pre-tax benefit through the company's Section 125 plan, with {s.pricingMode === 'tiers' ? 'a preventative care package set by the plan their tax savings support' : `a ${s.benefitPackage?.name} preventative care package`}. Because the deduction comes out before taxes, both the employee's and the employer's payroll taxes go down. {s.retirement
+          <p>Eligible employees enroll in a pre-tax benefit through the company's Section 125 plan, with virtual care on every plan{(() => { const a = s.voluntary?.addOns?.find((x: any) => x.id === 'mec'); return a ? `, plus ${a.name} for the ${a.enrolled ?? 0} whose savings cover it` : ''; })()}. Because the deduction comes out before taxes, both the employee's and the employer's payroll taxes go down. {s.retirement
             ? s.retirement.socialSecurity === 'none'
               ? ` The district does not pay Social Security, so it saves Medicare tax (1.45%) on every dollar deducted. ${s.retirement.cafeteriaReductionsCovered ? `${s.retirement.name} counts the deduction as pay, so TRS contributions and pensions stay the same.` : ''}`
               : ` The district saves Social Security (where it is paid) and Medicare tax on every dollar deducted. ${s.retirement.cafeteriaReductionsCovered ? `${s.retirement.name} counts the deduction as pay, so TRS contributions and pensions stay the same.` : ''}`
@@ -614,6 +623,7 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
             <tr><td>Employer payroll tax savings per year</td><td className="num"><b>{money(s.employerAnnualSavings.total)}</b></td></tr>
             {s.adminFee?.annual > 0 && <tr><td>Admin fee per year ({money(s.adminFee.amount)} {s.adminFee.per === 'month' ? 'a month' : 'per enrolled employee a month'})</td><td className="num">−{money(s.adminFee.annual)}</td></tr>}
             {s.adminFee?.annual > 0 && <tr><td>Remaining employer savings per year</td><td className="num"><b>{money(s.employerNetAnnualSavings)}</b></td></tr>}
+            {s.voluntary?.addOns?.filter((a: any) => a.id === 'mec').map((a: any) => <tr key={a.id}><td>Employees with {a.name} ({money(a.monthlyCost)} a month on top of the plan)</td><td className="num">{a.enrolled ?? 0}</td></tr>)}
             {s.voluntary && <tr><td>{s.voluntary.addOns.length ? `Employee savings left after the plan and ${s.voluntary.addOns.map((a: any) => a.name.toLowerCase()).join(' and ')}, per month` : 'Voluntary benefit surplus per month (employee savings left after the plan price)'}</td><td className="num">{money(s.voluntary.surplusMonthly)}</td></tr>}
             <tr><td>Employer savings per enrolled employee per year</td><td className="num">{money(s.employerAnnualSavings.perEmployee)}</td></tr>
             {!s.retirement && <tr><td>Valuation increase at {result.settings.ebitdaMultiple}x EBITDA</td><td className="num"><b>{money(s.valuationIncrease)}</b></td></tr>}
@@ -764,7 +774,7 @@ function OverrideEditor({ e, onChange, busy, partTime }: any) {
   );
 }
 
-const REPORT_COLS: [string, string][] = [['state', 'State'], ['plan', 'Plan'], ['deduction', 'Deduction per check'], ['employeeSavings', 'Employee savings per month'], ['voluntary', 'Voluntary benefit surplus (and add-ons)'], ['employerSavings', 'Employer savings per year']];
+const REPORT_COLS: [string, string][] = [['state', 'State'], ['plan', 'Plan'], ['inPerson', 'In-Person Preventative'], ['deduction', 'Deduction per check'], ['employeeSavings', 'Employee savings per month'], ['voluntary', 'Voluntary benefit surplus (and add-ons)'], ['employerSavings', 'Employer savings per year']];
 
 /** Edit what the client sees, preview it, and publish fresh links. */
 function ClientPage({ id, dirty, repeats, reportSettings: rs, setReportSettings, onSave, canShare, editable, publicEmployer }: any) {

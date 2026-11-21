@@ -8,15 +8,41 @@ const base: CensusRow = { rowNumber: 2, employeeId: '1', firstName: 'Pat', lastN
 const rows: CensusRow[] = [base, { ...base, rowNumber: 3, employeeId: '2', grossPay: 2600 }, { ...base, rowNumber: 4, employeeId: '3', grossPay: 300 }];
 
 describe('voluntary benefit add-ons', () => {
-  it('dental $30 and vision $20 are offered, off by default', () => {
+  it('In-Person Preventative ($55) is on by default, on top of the plan; dental $30 and vision $20 are offered, off by default', () => {
     expect(DEFAULT_PROPOSAL_SETTINGS.voluntaryBenefits).toEqual([
+      { id: 'mec', name: 'In-Person Preventative', monthlyCost: 55, selected: true, onlyIfAffordable: true },
       { id: 'dental', name: 'Dental', monthlyCost: 30, selected: false },
       { id: 'vision', name: 'Vision', monthlyCost: 20, selected: false },
     ]);
+    // Every plan and tier is virtual care; In-Person Preventative is not a plan package any more.
+    const s = DEFAULT_PROPOSAL_SETTINGS;
+    expect([s.benefitPackageId, s.partTime.benefitPackageId, ...s.tiers.map((t) => t.benefitPackageId)].every((id) => id === 'virtual')).toBe(true);
   });
 
-  it('with none chosen, each enrolled employee shows their savings left after the plan price as the surplus', () => {
+  it('In-Person Preventative goes on top only for those whose savings cover the plan price plus $55; the rest keep virtual care alone', () => {
     const r = runProposal(rows, { year: 2027 }, db);
+    const on = r.employees.filter((e) => e.voluntary);
+    expect(on.length).toBeGreaterThan(0);
+    for (const e of on) {
+      const allot = e.eligibility === 'PT Eligible' ? e.partTime!.allotment : e.monthly!.allotment;
+      const covers = allot - e.voluntary!.price >= 55;
+      expect(e.voluntary!.addOns.map((a) => a.id)).toEqual(covers ? ['mec'] : []);
+      expect(e.voluntary!.surplus).toBeCloseTo(allot - e.voluntary!.price - (covers ? 55 : 0), 2);
+      if (!covers) expect(e.voluntary!.without).toEqual(['In-Person Preventative']);
+      expect(e.flags.join(' ')).not.toMatch(/add-on/); // not having it is not a shortfall
+    }
+    expect(r.summary.voluntary.shortfalls).toBe(0);
+    expect(r.summary.voluntary.addOns[0]).toMatchObject({ id: 'mec', enrolled: on.filter((e) => e.voluntary!.addOns.length).length });
+    // A tight price leaves no room for it: that employee keeps the plan without it.
+    const a = r.employees[0];
+    const tight = runProposal([base], { year: 2027, allotmentThreshold: Math.floor(a.monthly!.allotment) - 10 }, db).employees[0];
+    expect(tight.eligibility).toBe('Eligible');
+    expect(tight.voluntary!.addOns).toEqual([]);
+  });
+
+  it('with no add-on chosen, each enrolled employee shows their savings left after the plan price as the surplus', () => {
+    const none = DEFAULT_PROPOSAL_SETTINGS.voluntaryBenefits.map((v) => ({ ...v, selected: false }));
+    const r = runProposal(rows, { year: 2027, voluntaryBenefits: none }, db);
     const [a, b, c] = r.employees;
     expect(a.eligibility).toBe('Eligible');
     expect(a.voluntary).toEqual({ price: 159, addOns: [], addOnCost: 0, surplus: Math.round((a.monthly!.allotment - 159) * 100) / 100 });
@@ -25,13 +51,19 @@ describe('voluntary benefit add-ons', () => {
     expect(r.summary.voluntary.addOns).toEqual([]);
   });
 
-  it('chosen add-ons come out of the surplus, and a shortfall is flagged', () => {
-    const vb = DEFAULT_PROPOSAL_SETTINGS.voluntaryBenefits.map((v) => ({ ...v, selected: true }));
+  it('a saved proposal from before In-Person Preventative keeps its numbers: the new add-on starts unselected', () => {
+    const old = [{ id: 'dental', name: 'Dental', monthlyCost: 30, selected: false }, { id: 'vision', name: 'Vision', monthlyCost: 20, selected: false }];
+    const r = runProposal(rows, { year: 2027, voluntaryBenefits: old }, db);
+    expect(r.settings.voluntaryBenefits.find((v) => v.id === 'mec')!.selected).toBe(false);
+    expect(r.summary.voluntary.addOns).toEqual([]);
+  });
+
+  it('chosen dental and vision come out of the surplus for everyone, and a shortfall is flagged', () => {
+    const vb = DEFAULT_PROPOSAL_SETTINGS.voluntaryBenefits.map((v) => ({ ...v, selected: v.id !== 'mec' }));
     const r = runProposal(rows, { year: 2027, voluntaryBenefits: vb }, db);
     const a = r.employees[0];
     expect(a.voluntary!.addOnCost).toBe(50);
     expect(a.voluntary!.surplus).toBeCloseTo(a.monthly!.allotment - 159 - 50, 2);
-    // Price set just under the allotment: the add-ons do not fit.
     const tight = runProposal([base], { year: 2027, voluntaryBenefits: vb, allotmentThreshold: Math.floor(a.monthly!.allotment) - 10 }, db);
     expect(tight.employees[0].voluntary!.surplus).toBeLessThan(0);
     expect(tight.employees[0].flags.join(' ')).toMatch(/dental and vision add-ons \(\$50\.00 a month\) cost more/);
