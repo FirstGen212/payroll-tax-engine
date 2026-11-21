@@ -58,6 +58,6 @@ export async function seed() {
   console.log(`seeded ${counts.j} jurisdictions, ${counts.r} tax rules, ${counts.s} sources`);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (/[\\/]seed\.[cm]?[jt]s$/.test(process.argv[1] ?? '')) {
   seed().then(() => pool.end()).catch((e) => { console.error(e); process.exit(1); });
 }

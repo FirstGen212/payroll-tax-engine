@@ -220,6 +220,7 @@ export default function ProposalBuilder() {
             <span className="muted small">{mappedCount}/{defaults.fields.length} fields mapped · {rows.length} rows</span>
           </div>
           {file?.sheets?.length ? <label style={{ maxWidth: 300, marginTop: 8 }}>Sheet<select value={sheetName} onChange={(e) => chooseSheet(file, e.target.value)}>{file.sheets.map((s) => <option key={s.name} value={s.name}>{s.name} ({s.rows.length} rows)</option>)}</select></label> : null}
+          {file?.sheets?.find((s) => s.name === sheetName)?.truncated && <div className="err" style={{ marginTop: 8 }}>This sheet has more than 20,000 rows. Only the first 20,000 were read; split the file to run the rest.</div>}
           {missing.length > 0 && <div className="err" style={{ marginTop: 8 }}>Map these before calculating: {missing.map((m) => FIELD_LABELS[m]).join(', ')}</div>}
           <details open={!result} style={{ marginTop: 8 }}>
             <summary>Fields</summary>

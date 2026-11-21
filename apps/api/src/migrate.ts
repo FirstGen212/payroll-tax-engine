@@ -16,6 +16,6 @@ export async function migrate() {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (/[\\/]migrate\.[cm]?[jt]s$/.test(process.argv[1] ?? '')) {
   migrate().then(() => pool.end());
 }

@@ -5,7 +5,10 @@
   "private": true,
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "start": "tsx src/server.ts",
+    "build": "esbuild src/server.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/server.js --external:fastify --external:@fastify/* --external:pg --external:exceljs --external:zod",
+    "prestart": "npm run build",
+    "start": "node dist/server.js",
+    "start:dev": "tsx src/server.ts",
     "migrate": "tsx src/migrate.ts",
     "seed": "tsx src/seed.ts",
     "seed:demo": "tsx src/seed-demo.ts",
@@ -24,6 +27,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@types/pg": "^8.11.10"
+    "@types/pg": "^8.11.10",
+    "esbuild": "^0.28.2"
   }
 }

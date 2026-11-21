@@ -38,4 +38,4 @@ export async function seedDemo() {
   console.log('demo clients created');
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) seedDemo().then(() => pool.end());
+if (/[\\/]seed-demo\.[cm]?[jt]s$/.test(process.argv[1] ?? '')) seedDemo().then(() => pool.end());

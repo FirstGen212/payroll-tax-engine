@@ -5,9 +5,10 @@ services:
     name: payroll-tax-engine
     runtime: node
     plan: starter            # always on; "free" also works but sleeps after 15 minutes idle
-    buildCommand: npm ci --include=dev && npm run build -w apps/web
-    # Creates/updates the schema and loads the tax database (safe to re-run; client data is kept), then starts the app.
-    startCommand: npm run db:seed && npm start -w apps/api
+    buildCommand: npm ci --include=dev && npm run build -w apps/web && npm run build -w apps/api
+    # The app is compiled to plain JavaScript and run by node alone, which keeps it well inside the plan's 512 MB.
+    # On start it creates/updates the schema and loads the tax database (safe to re-run; client data is kept).
+    startCommand: node apps/api/dist/server.js
     healthCheckPath: /api/health
     autoDeploy: true
     envVars:

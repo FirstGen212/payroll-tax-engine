@@ -230,7 +230,7 @@ export async function proposalRoutes(app: FastifyInstance) {
     if (!sheets.length) throw Object.assign(new Error('No sheets with data found.'), { statusCode: 400 });
     const scored = sheets.map((s) => ({ ...s, mapping: autoMapColumns(s.headers) }));
     const best = scored.find((s) => /underwrit/i.test(s.name)) ?? [...scored].sort((a, b) => Object.keys(b.mapping).length - Object.keys(a.mapping).length)[0];
-    return { fileName: b.fileName, suggestedSheet: best.name, sheets: scored.map((s) => ({ name: s.name, headers: s.headers, rows: s.rows, mapping: s.mapping })) };
+    return { fileName: b.fileName, suggestedSheet: best.name, sheets: scored.map((s) => ({ name: s.name, headers: s.headers, rows: s.rows, mapping: s.mapping, truncated: s.truncated })) };
   });
 
   app.post('/api/proposals/calculate', async (req) => calculate(Calc.parse(req.body)));
