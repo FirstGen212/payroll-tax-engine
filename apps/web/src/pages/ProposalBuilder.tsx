@@ -25,6 +25,8 @@ const REQUIRED = ['grossPay', 'payFrequency', 'workState', 'federalFilingStatus'
 const ORDER = ['Eligible', 'PT Eligible', 'No Federal Taxes Paid', 'NEEDS REVIEW', 'Not Eligible - Insufficient Savings', 'Not Eligible - Insufficient Savings + No Federal Taxes Paid', 'Not Eligible - Low Income', 'Not Eligible - Insufficient Hours', 'Not Eligible - Insufficient Funds', 'Not Eligible - No Gross Compensation'];
 const SHORT = (e: string) => e.replace('Not Eligible - ', '');
 const ELIG_CLASS = (e: string) => (e === 'Excluded' ? 'b-neutral' : e === 'Eligible' || e === 'PT Eligible' ? 'b-ok' : e === 'NEEDS REVIEW' || e === 'No Federal Taxes Paid' ? 'b-warn' : 'b-bad');
+/** Pay frequencies with their own standard First Gen deduction. */
+const FREQS: [string, string][] = [['weekly', 'weekly'], ['biweekly', 'biweekly'], ['semimonthly', 'semi-monthly'], ['monthly', 'monthly']];
 const pctf = (n?: number) => (n === undefined || n === null ? '' : `${(n * 100).toFixed(1)}%`);
 const colLetter = (i: number) => (i < 26 ? String.fromCharCode(65 + i) : String.fromCharCode(64 + Math.floor(i / 26)) + String.fromCharCode(65 + (i % 26)));
 
@@ -131,6 +133,7 @@ export default function ProposalBuilder() {
       // The client's payroll model and Social Security coverage carry into the proposal.
       retirementSystem: c.retirement_system ?? '',
       publicEmployer: { ...settings.publicEmployer, socialSecurityCovered: c.retirement_system ? !!c.social_security_covered : false },
+      ...(c.retirement_system ? { allotmentBuffer: 1 } : {}),
     });
   };
 
@@ -147,7 +150,10 @@ export default function ProposalBuilder() {
   const setPT = (p: any) => setS({ partTime: { ...settings.partTime, ...p } });
   const setPub = (p: any) => setS({ publicEmployer: { ...settings.publicEmployer, ...p } });
   // Governments are FUTA-exempt; switching to a public model turns that on (it can still be changed under Calculation).
-  const setModel = (code: string) => setS({ retirementSystem: code, ...(code ? { employer: { ...settings.employer, futaExempt: true } } : {}) });
+  // Districts are priced on the full tax savings, so a public model also starts the allotment buffer at 100%.
+  const setModel = (code: string) => setS({ retirementSystem: code, ...(code ? { employer: { ...settings.employer, futaExempt: true }, allotmentBuffer: 1 } : {}) });
+  const dedByFreq = { ...(defaults.settings?.deductionByFrequency ?? {}), ...(settings.deductionByFrequency ?? {}) };
+  const setDed = (freq: string, v: number) => setS({ deductionByFrequency: { ...dedByFreq, [freq]: v } });
   const rsys = (ref?.retirementSystems ?? []).find((r: any) => r.code === settings.retirementSystem);
   const noSS = !!settings.retirementSystem && !settings.publicEmployer?.socialSecurityCovered;
   const mappedCount = Object.values(mapping).filter(Boolean).length;
@@ -215,7 +221,7 @@ export default function ProposalBuilder() {
       <div className="panel noprint">
         <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
           <span className="row" style={{ alignItems: 'center', gap: 8 }}><h3 style={{ margin: 0 }}>Eligibility requirements</h3><span className="badge b-neutral">11 rules</span><button className="small" onClick={() => setEditReq(!editReq)}>{editReq ? 'Close' : 'Edit'}</button></span>
-          {!editReq && <span className="muted small">{settings.benefitPackages.find((p: any) => p.id === settings.benefitPackageId)?.name} package · allotment ≥ {money(settings.allotmentThreshold)} · low income ≤ {money(settings.lowIncomeMax)} · ≥ {settings.minHoursPerPeriod} hrs/period · review ≥ {money(settings.needsReviewAllotment)} · buffer {Math.round(settings.allotmentBuffer * 100)}% · deduction {money(settings.deductionPerCheck)}/check</span>}
+          {!editReq && <span className="muted small">{settings.benefitPackages.find((p: any) => p.id === settings.benefitPackageId)?.name} package · allotment ≥ {money(settings.allotmentThreshold)} · low income ≤ {money(settings.lowIncomeMax)} · ≥ {settings.minHoursPerPeriod} hrs/period · review ≥ {money(settings.needsReviewAllotment)} · buffer {Math.round(settings.allotmentBuffer * 100)}% · deduction {money(dedByFreq.weekly)} weekly, {money(dedByFreq.biweekly)} biweekly, {money(dedByFreq.semimonthly)} semi-monthly, {money(dedByFreq.monthly)} monthly</span>}
         </div>
         {editReq && (
           <div style={{ marginTop: 12 }}>
@@ -228,8 +234,8 @@ export default function ProposalBuilder() {
               <label>State tax threshold: minimum state tax per check in income-tax states ($, flagged)<input type="number" step="0.01" value={settings.stateTaxThreshold} onChange={(e) => setS({ stateTaxThreshold: num(e.target.value) })} /></label>
               <label>Needs review threshold: allotment at or above this flags NEEDS REVIEW ($)<input type="number" value={settings.needsReviewAllotment} onChange={(e) => setS({ needsReviewAllotment: num(e.target.value) })} /></label>
               <label>Allotment buffer: multiplier on monthly tax savings (0.75 = 75%)<input type="number" step="0.01" value={settings.allotmentBuffer} onChange={(e) => setS({ allotmentBuffer: num(e.target.value) })} /></label>
-              <label>First Gen deduction per check (when the file has none) ($)<input type="number" step="0.01" value={settings.deductionPerCheck} onChange={(e) => setS({ deductionPerCheck: num(e.target.value) })} /></label>
-              <label>File's First Gen deduction amount is per<select value={settings.useRowDeduction ? settings.rowDeductionPer : 'ignore'} onChange={(e) => setS(e.target.value === 'ignore' ? { useRowDeduction: false } : { useRowDeduction: true, rowDeductionPer: e.target.value })}><option value="check">check</option><option value="month">month</option><option value="ignore">ignore it, use the amount above</option></select></label>
+              {FREQS.map(([f, label]) => <label key={f}>First Gen deduction per check, {label} pay (when the file has none) ($)<input type="number" step="0.01" value={dedByFreq[f] ?? ''} onChange={(e) => setDed(f, num(e.target.value))} /></label>)}
+              <label>File's First Gen deduction amount is per<select value={settings.useRowDeduction ? settings.rowDeductionPer : 'ignore'} onChange={(e) => setS(e.target.value === 'ignore' ? { useRowDeduction: false } : { useRowDeduction: true, rowDeductionPer: e.target.value })}><option value="check">check</option><option value="month">month</option><option value="ignore">ignore it, use the amounts above</option></select></label>
               <label>Employees with no federal tax withheld<select value={settings.noFederalTaxAs} onChange={(e) => setS({ noFederalTaxAs: e.target.value })}><option value="warning">Warning only (still eligible)</option><option value="status">Own status: No Federal Taxes Paid</option></select></label>
               <label>Participation: share of eligible employees expected to enroll (%)<input type="number" min={0} max={100} value={Math.round((settings.participationRate ?? 1) * 100)} onChange={(e) => setS({ participationRate: Math.min(100, Math.max(0, num(e.target.value))) / 100 })} /></label>
               <label>Employer savings<select value={settings.employerSavingsBasis} onChange={(e) => setS({ employerSavingsBasis: e.target.value })}><option value="fica">{noSS ? 'Medicare only (1.45%, no Social Security)' : 'Social Security + Medicare (7.65%)'}</option><option value="all">All employer taxes (adds FUTA, SUI, etc.)</option></select></label>
@@ -659,7 +665,7 @@ function History({ id, onLoad, editable }: any) {
             <td className="num">{r.summary?.eligibleTotal ?? '—'}</td>
             <td className="num">{money(r.summary?.employerAnnualSavings?.total)}</td>
             <td className="num">{money(r.summary?.valuationIncrease)}</td>
-            <td className="small muted">{money(r.settings.allotmentThreshold)} price · {money(r.settings.deductionPerCheck)}/check · {Math.round((r.settings.participationRate ?? 1) * 100)}% enroll · {Object.keys(r.settings.overrides ?? {}).length} overrides</td>
+            <td className="small muted">{money(r.settings.allotmentThreshold)} price · {r.settings.deductionByFrequency ? `${money(r.settings.deductionByFrequency.semimonthly)} semi-monthly` : `${money(r.settings.deductionPerCheck)}/check`} · {Math.round((r.settings.participationRate ?? 1) * 100)}% enroll · {Object.keys(r.settings.overrides ?? {}).length} overrides</td>
             <td>{editable && <button className="small" onClick={() => onLoad(r.settings)}>Load these rules</button>}</td>
           </tr>
         ))}

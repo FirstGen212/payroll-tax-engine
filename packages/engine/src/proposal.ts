@@ -119,8 +119,13 @@ export interface PublicEmployerSettings {
 export interface ProposalSettings {
   /** Plan year: the engine runs every check date in this year. */
   year: number;
-  /** First Gen pre-tax deduction per check when the file has no per-employee amount. */
+  /**
+   * Older single default amount per check. No longer used: a row with no amount in the file takes the
+   * amount for its pay frequency from `deductionByFrequency`. Kept so saved proposals still load.
+   */
   deductionPerCheck: number;
+  /** First Gen pre-tax deduction per check by pay frequency, used when the file has no amount for the row. */
+  deductionByFrequency: Partial<Record<PayFrequency, number>>;
   /** Use the file's per-employee deduction amount when present. */
   useRowDeduction: boolean;
   rowDeductionPer: 'check' | 'month';
@@ -183,6 +188,8 @@ export interface ProposalSettings {
 export const DEFAULT_PROPOSAL_SETTINGS: ProposalSettings = {
   year: 2027,
   deductionPerCheck: 298.38,
+  // $15,516 a year, spread over the checks.
+  deductionByFrequency: { monthly: 1293, semimonthly: 646.5, biweekly: 596.77, weekly: 298.38 },
   useRowDeduction: true,
   rowDeductionPer: 'check',
   benefitPackages: [
@@ -493,6 +500,14 @@ export const PROPOSAL_DEDUCTION_CODE = 'PROPOSED_125';
 /** Deduction code for a public retirement system member contribution (414(h)(2) pick-up). */
 export const PICKUP_CODE = '401A_PICKUP';
 
+/** The standard First Gen deduction per check for a pay frequency. Frequencies without their own amount get the semi-monthly year spread over their checks. */
+export function standardDeduction(s: Pick<ProposalSettings, 'deductionByFrequency'>, freq: PayFrequency): number {
+  const set = { ...DEFAULT_PROPOSAL_SETTINGS.deductionByFrequency, ...(s.deductionByFrequency ?? {}) };
+  const own = set[freq];
+  if (own !== undefined && own > 0) return own;
+  return r2(((set.semimonthly ?? 646.5) * 24) / PERIODS_PER_YEAR[freq]);
+}
+
 /** The public retirement system a proposal is modeled on, if any. */
 export function retirementSystemOf(s: Pick<ProposalSettings, 'retirementSystem'>): RetirementSystem | undefined {
   return s.retirementSystem ? RETIREMENT_SYSTEMS.find((r) => r.code === s.retirementSystem) : undefined;
@@ -730,7 +745,7 @@ function evaluateRules(row: CensusRow, s: ProposalSettings, db: TaxDatabase): Pr
 
   // 2. Before / after on the standard plan
   const useRow = s.useRowDeduction && row.proposedDeduction && row.proposedDeduction > 0;
-  let dedPerCheck = r2(useRow ? (s.rowDeductionPer === 'check' ? row.proposedDeduction! : (row.proposedDeduction! * 12) / periods) : s.deductionPerCheck);
+  let dedPerCheck = r2(useRow ? (s.rowDeductionPer === 'check' ? row.proposedDeduction! : (row.proposedDeduction! * 12) / periods) : standardDeduction(s, freq));
   if (ov?.deductionPerCheck !== undefined && ov.deductionPerCheck !== null && ov.deductionPerCheck > 0) {
     res.flags.push(`Deduction set by the reviewer: ${usd(ov.deductionPerCheck)} per check (was ${usd(dedPerCheck)}).`);
     dedPerCheck = r2(ov.deductionPerCheck);
@@ -897,8 +912,9 @@ function savingsReason(res: ProposalEmployeeResult, c: EvalContext, s: ProposalS
   const T = s.allotmentThreshold;
   const head = `Their estimated savings are ${usd(res.monthly!.allotment)} a month, and the plan needs ${usd(T)}.`;
   const would = (r: CensusRow, ded?: number) => approxAllotment(r, c.gross, c, s, db, ded) >= T;
-  if (c.dedPerCheck < s.deductionPerCheck && would(row, s.deductionPerCheck)) {
-    return `${head} The ${usd(c.dedPerCheck)} deduction set for them is smaller than the standard ${usd(s.deductionPerCheck)}, so there is less tax to save.`;
+  const standard = standardDeduction(s, c.freq);
+  if (c.dedPerCheck < standard && would(row, standard)) {
+    return `${head} The ${usd(c.dedPerCheck)} deduction set for them is smaller than the standard ${usd(standard)}, so there is less tax to save.`;
   }
   const before = res.check!.before;
   const after = res.check!.after;
@@ -963,7 +979,7 @@ function explainEmployee(res: ProposalEmployeeResult, s: ProposalSettings, db: T
     case 'no-pay':
       return make('notEligible', 'Not eligible', 'No pay reported', 'No pay was reported for them in the file.', ['Send a recent pay period for them and we will run their numbers.']);
     case 'funds':
-      return make('notEligible', 'Not eligible', 'Paycheck too small', `The ${usd(c?.dedPerCheck ?? s.deductionPerCheck)} deduction${c && c.existing > 0 ? `, on top of ${usd(c.existing)} in deductions they already have,` : ''} is more than their ${usd((c?.gross ?? 0) + (c?.otherComp ?? 0))} check can cover.${ptTried}`, ways());
+      return make('notEligible', 'Not eligible', 'Paycheck too small', `The ${usd(c?.dedPerCheck ?? standardDeduction(s, res.frequency ?? 'biweekly'))} deduction${c && c.existing > 0 ? `, on top of ${usd(c.existing)} in deductions they already have,` : ''} is more than their ${usd((c?.gross ?? 0) + (c?.otherComp ?? 0))} check can cover.${ptTried}`, ways());
     case 'savings':
       return make('notEligible', 'Not eligible', 'Savings too low', (c && res.monthly && res.check ? savingsReason(res, c, s, db) : res.monthly ? `Their estimated savings are ${usd(res.monthly.allotment)} a month, and the plan needs ${usd(s.allotmentThreshold)}.` : 'Their estimated savings are under what the plan needs.') + ptTried, ways());
     case 'low-income':
@@ -1021,6 +1037,7 @@ export function runProposal(rows: CensusRow[], settings: Partial<ProposalSetting
     partTime: { ...DEFAULT_PROPOSAL_SETTINGS.partTime, ...(settings.partTime ?? {}) },
     employer: { ...DEFAULT_PROPOSAL_SETTINGS.employer, ...(settings.employer ?? {}) },
     publicEmployer: { ...DEFAULT_PROPOSAL_SETTINGS.publicEmployer, ...(settings.publicEmployer ?? {}) },
+    deductionByFrequency: { ...DEFAULT_PROPOSAL_SETTINGS.deductionByFrequency, ...(settings.deductionByFrequency ?? {}) },
     overrides: settings.overrides ?? {},
     participationRate: settings.participationRate ?? DEFAULT_PROPOSAL_SETTINGS.participationRate,
   };

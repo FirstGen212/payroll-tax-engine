@@ -14,7 +14,7 @@ const rows: CensusRow[] = [
   { ...base, rowNumber: 4, employeeId: '3', firstName: 'Sam', lastName: 'Cole', grossPay: 480 }, // under the pay minimum
   { ...base, rowNumber: 5, employeeId: '4', firstName: 'Lou', lastName: 'Park', hoursPerPeriod: 20 }, // part-time plan
 ];
-const settings = { year: 2027, deductionPerCheck: 200, useRowDeduction: false, allotmentThreshold: 100, partTime: { enabled: true, deductionPerCheck: 120, allotmentThreshold: 50, maxHoursPerWeek: 29, maxAnnualGross: 20000 } };
+const settings = { year: 2027, deductionByFrequency: { weekly: 200 }, useRowDeduction: false, allotmentThreshold: 100, partTime: { enabled: true, deductionPerCheck: 120, allotmentThreshold: 50, maxHoursPerWeek: 29, maxAnnualGross: 20000 } };
 const headers = ['First Name', 'Last Name', 'Gross Pay'];
 const raw = rows.map((r) => ({ 'First Name': r.firstName, 'Last Name': r.lastName, 'Gross Pay': r.grossPay }));
 

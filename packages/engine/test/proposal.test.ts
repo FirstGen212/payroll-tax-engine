@@ -5,7 +5,7 @@ import type { CensusRow } from '../src/index.js';
 
 const db = loadTaxDatabase();
 const base: CensusRow = { rowNumber: 2, employeeId: '1', firstName: 'Pat', lastName: 'Lee', workState: 'TX', grossPay: 1000, payFrequency: 'Weekly', hoursPerPeriod: 40, federalFilingStatus: 'Single' };
-const std = { year: 2027, deductionPerCheck: 200, useRowDeduction: false, allotmentThreshold: 100 };
+const std = { year: 2027, deductionByFrequency: { weekly: 200 }, useRowDeduction: false, allotmentThreshold: 100 };
 
 describe('proposal tool', () => {
   it('weekly $1,000 TX single with a $200/check pre-tax deduction', () => {
@@ -268,5 +268,32 @@ describe('Texas TRS payroll model', () => {
     expect(m.socialSecurityPaid).toBe('Social Security');
     const rows = rowsFromSheet([{ 'Employee ID': '1', 'Gross Pay': '1,000', TRS: '82.50', 'Social Security': '0' }], m);
     expect(rows[0]).toMatchObject({ retirementSystemContribution: 82.5, socialSecurityPaid: false });
+  });
+});
+
+describe('standard First Gen deduction by pay frequency', () => {
+  const pay = { ...base, grossPay: 4000, hoursPerPeriod: 80 };
+  const run = (row: CensusRow, s: object = {}) => runProposal([row], { year: 2027, ...s }, db).employees[0].deductionPerCheck;
+
+  it('uses $298.38 weekly, $596.77 biweekly, $646.50 semi-monthly and $1,293 monthly when the file has no amount', () => {
+    expect(run({ ...pay, payFrequency: 'Weekly' })).toBe(298.38);
+    expect(run({ ...pay, payFrequency: 'Bi-weekly' })).toBe(596.77);
+    expect(run({ ...pay, payFrequency: 'Semi-Monthly' })).toBe(646.5);
+    expect(run({ ...pay, payFrequency: 'Monthly' })).toBe(1293);
+  });
+
+  it('applies to every proposal, not only the TRS model', () => {
+    expect(run({ ...pay, payFrequency: 'Semi-Monthly' }, { retirementSystem: 'TX_TRS' })).toBe(646.5);
+    expect(run({ ...pay, payFrequency: 'Semi-Monthly' }, { retirementSystem: '' })).toBe(646.5);
+  });
+
+  it("keeps the file's own amount for a row when it has one", () => {
+    expect(run({ ...pay, payFrequency: 'Semi-Monthly', proposedDeduction: 500 }, { useRowDeduction: true, rowDeductionPer: 'check' })).toBe(500);
+  });
+
+  it('lets the reviewer change one frequency and keeps the others', () => {
+    const s = { deductionByFrequency: { monthly: 1000 } };
+    expect(run({ ...pay, payFrequency: 'Monthly' }, s)).toBe(1000);
+    expect(run({ ...pay, payFrequency: 'Semi-Monthly' }, s)).toBe(646.5);
   });
 });
