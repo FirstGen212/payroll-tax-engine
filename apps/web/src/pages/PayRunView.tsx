@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { api, money } from '../api';
+import { api, csvFile, money, saveBlob } from '../api';
 import { PageHead, PayStub } from '../components';
 
 export default function PayRunView() {
@@ -11,8 +11,8 @@ export default function PayRunView() {
   const t = run.totals;
   const csv = () => {
     const keys = [...new Set(run.statements.flatMap((s: any) => s.result.taxes.map((x: any) => `${x.jurisdiction}.${x.kind}`)))] as string[];
-    const rows = [['Employee', 'Gross', ...keys, 'Net'].join(','), ...run.statements.map((s: any) => [`${s.last_name} ${s.first_name}`, s.gross, ...keys.map((k) => s.result.taxes.filter((x: any) => `${x.jurisdiction}.${x.kind}` === k).reduce((a: number, x: any) => a + x.amount, 0)), s.net].join(','))];
-    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([rows.join('\n')], { type: 'text/csv' })); a.download = `payrun-${String(run.check_date).slice(0, 10)}.csv`; a.click();
+    const rows = [['Employee', 'Gross', ...keys, 'Net'], ...run.statements.map((s: any) => [`${s.last_name} ${s.first_name}`, Number(s.gross), ...keys.map((k) => Math.round(s.result.taxes.filter((x: any) => `${x.jurisdiction}.${x.kind}` === k).reduce((a: number, x: any) => a + x.amount, 0) * 100) / 100), Number(s.net)])];
+    saveBlob(csvFile(rows), `payrun-${String(run.check_date).slice(0, 10)}.csv`);
   };
   return (
     <>

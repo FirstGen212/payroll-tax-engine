@@ -22,7 +22,27 @@ export async function downloadFile(path: string, name: string, init?: RequestIni
   const res = await fetch(`/api${path}`, init);
   if (res.status === 401) window.dispatchEvent(new Event('auth:required'));
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? 'The file could not be built.');
-  const url = URL.createObjectURL(await res.blob());
-  Object.assign(document.createElement('a'), { href: url, download: name }).click();
-  URL.revokeObjectURL(url);
+  saveBlob(await res.blob(), name);
 }
+
+/** Hand a file to the browser's download. The address is freed a minute later: freeing it at once can cancel the download. */
+export function saveBlob(blob: Blob, name: string): void {
+  const url = URL.createObjectURL(blob);
+  Object.assign(document.createElement('a'), { href: url, download: name }).click();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+/**
+ * One CSV cell. Text that starts with = + - @ or a tab is a formula to Excel, so a name like "=HYPERLINK(...)" in a
+ * client's file could run when the CSV is opened: such text gets a leading apostrophe. Numbers are left as they are.
+ */
+export function csvCell(v: unknown): string {
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'number') return Number.isFinite(v) ? String(v) : '';
+  let t = String(v);
+  if (/^[=+\-@\t\r]/.test(t)) t = `'${t}`;
+  return /[",\n\r']/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+}
+
+/** A CSV file from rows of cells (with a byte-order mark so Excel reads accents correctly). */
+export const csvFile = (rows: unknown[][]) => new Blob(['\uFEFF' + rows.map((r) => r.map(csvCell).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' });

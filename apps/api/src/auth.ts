@@ -13,7 +13,7 @@ import { createHash, randomBytes, scrypt as scryptCb, timingSafeEqual } from 'no
 import { promisify } from 'node:util';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { q } from './db.js';
+import { q, tx } from './db.js';
 
 const scrypt = promisify(scryptCb) as (pw: string, salt: Buffer, len: number) => Promise<Buffer>;
 
@@ -233,8 +233,8 @@ export async function registerAuth(app: FastifyInstance) {
 
   app.post('/api/auth/setup', async (req, reply) => {
     const b = z.object({ name: z.string().trim().min(1).max(120), email: z.string().email().max(200), password: z.string().min(10, 'Passwords need at least 10 characters.').max(200), setupKey: z.string().max(500).optional() }).parse(req.body);
-    const [{ n }] = await q('select count(*)::int n from app_user');
-    if (n > 0) throw httpError(409, 'An admin already exists. Sign in instead.');
+    const taken = async () => (await q('select count(*)::int n from app_user'))[0].n > 0;
+    if (await taken()) throw httpError(409, 'An admin already exists. Sign in instead.');
     if (!setupKey && hosted) throw httpError(403, 'Set APP_PASSWORD in the service environment first. It is the key for creating the first admin.');
     if (setupKey) {
       if (setups.blocked('setup')) throw httpError(429, 'Too many tries. Wait 15 minutes and try again.');
@@ -243,7 +243,14 @@ export async function registerAuth(app: FastifyInstance) {
         throw httpError(403, 'That setup key is not right. It is the APP_PASSWORD value in the Render service settings.');
       }
     }
-    const [u] = await q(`insert into app_user(email, name, role, password_hash) values($1,$2,'admin',$3) returning id`, [b.email.trim().toLowerCase(), b.name, await hashPassword(b.password)]);
+    // Two setup requests at the same moment must not both create an admin: they take turns on a lock, and the second
+    // one finds the first one's account.
+    const hash = await hashPassword(b.password);
+    const u = await tx(async (c) => {
+      await c.query('select pg_advisory_xact_lock(727001)');
+      if ((await c.query('select 1 from app_user limit 1')).rows.length) throw httpError(409, 'An admin already exists. Sign in instead.');
+      return (await c.query(`insert into app_user(email, name, role, password_hash) values($1,$2,'admin',$3) returning id`, [b.email.trim().toLowerCase(), b.name, hash])).rows[0];
+    });
     await audit(req, 'setup.first_admin', b.email, null, { actor: u.id, asUser: null });
     await startSession(req, reply, u.id);
     return { ok: true };
