@@ -130,7 +130,8 @@ export default function ProposalBuilder() {
   };
   // Picking a price shows that price's numbers at once (the analyzer works them out in the browser); every employee's
   // status and reason are then recalculated in the background.
-  const pickProgram = (price: number) => {
+  const pickProgram = (price: number, retry = false) => {
+    if (!retry && price === settings.allotmentThreshold) return;
     const s = { ...settings, allotmentThreshold: price };
     setSettings(s);
     void calculate(s, `Updating each employee at ${money(price)} a month…`);
@@ -186,7 +187,9 @@ export default function ProposalBuilder() {
       <div className="noprint">
         <PageHead eyebrow={<><Link to="/proposals">Proposal tool</Link> / {id ? 'Proposal' : 'New proposal'}</>} title={meta.company ?? (meta.name || 'New proposal')}>
           {result
-            ? <><b>{result.summary.eligibleTotal}</b> of <b>{result.summary.employees}</b> employees qualify, for <b>{money(result.summary.monthlySavings.total)}</b> a month in allotments and {result.summary.retirement ? <><b>{money(result.summary.employerAnnualSavings.total)}</b> a year in employer savings.</> : <>a <b>{money(result.summary.valuationIncrease)}</b> valuation increase.</>}</>
+            ? result.settings.pricingMode !== 'tiers' && settings.allotmentThreshold !== result.settings.allotmentThreshold && busy
+              ? <>Updating the proposal to the <b>{money(settings.allotmentThreshold)}</b> price…</>
+              : <><b>{result.summary.eligibleTotal}</b> of <b>{result.summary.employees}</b> employees qualify, for <b>{money(result.summary.monthlySavings.total)}</b> a month in allotments and {result.summary.retirement ? <><b>{money(result.summary.employerAnnualSavings.total)}</b> a year in employer savings.</> : <>a <b>{money(result.summary.valuationIncrease)}</b> valuation increase.</>}</>
             : rows.length ? <>Read <b>{rows.length}</b> rows. Check the column mapping, then calculate.</> : 'Upload a census, underwriting sheet or payroll register to compare every employee\'s taxes before and after the First Gen deduction.'}
         </PageHead>
       </div>
@@ -374,7 +377,7 @@ export default function ProposalBuilder() {
       )}
       {result && tab === 'results' && (
         <Results result={result} settings={settings} setS={setS} view={view} setView={setView} meta={meta} busy={busy} editable={editable}
-          onSave={save} onDownload={download} onPickProgram={editable ? pickProgram : () => {}} onPrices={setPrices} defaultPrices={defaults.settings?.programPrices} onOverride={setOverride} saveLabel={id ? 'Save changes' : 'Save proposal'} />
+          onSave={save} onDownload={download} onPickProgram={editable ? pickProgram : () => {}} onRetryPrice={() => pickProgram(settings.allotmentThreshold, true)} calcError={err} onPrices={setPrices} defaultPrices={defaults.settings?.programPrices} onOverride={setOverride} saveLabel={id ? 'Save changes' : 'Save proposal'} />
       )}
       {result && tab === 'client' && <ClientPage publicEmployer={!!result?.summary?.retirement} id={id} dirty={dirty} repeats={result.settings.dedupe ? 0 : result.summary.duplicates?.length ?? 0} reportSettings={reportSettings} setReportSettings={(r: any) => { setReportSettings(r); setDirty(true); }} onSave={save} canShare={can('proposals.share')} editable={editable} />}
       {result && tab === 'history' && id && <History id={id} onLoad={(s: any) => { setSettings({ ...settings, ...s }); setTab('results'); void calculate({ ...settings, ...s }); }} editable={editable} />}
@@ -382,8 +385,11 @@ export default function ProposalBuilder() {
   );
 }
 
-function Results({ result, settings, setS, view, setView, meta, busy, onSave, onDownload, onPickProgram, onPrices, defaultPrices, onOverride, editable, saveLabel }: any) {
+function Results({ result, settings, setS, view, setView, meta, busy, onSave, onDownload, onPickProgram, onRetryPrice, calcError, onPrices, defaultPrices, onOverride, editable, saveLabel }: any) {
   const s = result.summary;
+  // A price was picked and the numbers below are still for the old one: they are dimmed and labelled until the
+  // recalculation lands, so nothing on the page shows one price's table next to another price's totals.
+  const repricing = result.settings.pricingMode !== 'tiers' && settings.allotmentThreshold !== result.settings.allotmentThreshold;
   const [filter, setFilter] = useState('');
   const [stateF, setStateF] = useState('');
   const [search, setSearch] = useState('');
@@ -466,6 +472,13 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
             ? <TierMargins result={result} settings={settings} />
             : <MarginAnalyzer result={result} settings={settings} onPick={onPickProgram} onPrices={onPrices} defaultPrices={defaultPrices} editable={editable} busy={busy} />}
 
+          {repricing && (busy
+            ? <div className="fg-callout" role="status" style={{ marginBottom: 12 }}><span>Updating every number below to the <b>{money(settings.allotmentThreshold)}</b> price: eligible employees, allotments, employer savings, benefits and each employee's status.</span></div>
+            : <div className="err" role="alert" style={{ marginBottom: 12, alignItems: 'center' }}>
+                <span>The numbers below are still for <b>{money(result.settings.allotmentThreshold)}</b>, not the <b>{money(settings.allotmentThreshold)}</b> you picked{calcError ? `: ${calcError}` : '.'}</span>
+                {editable && <button className="small primary" onClick={onRetryPrice}>Update to {money(settings.allotmentThreshold)}</button>}
+              </div>)}
+          <div className={repricing ? 'fg-updating' : undefined} aria-busy={repricing || undefined}>
           {s.employeeAnnualTaxSavingsBy && <p className="small" style={{ margin: '0 0 8px' }}>Employees save <b>{money(s.employeeAnnualTaxSavings)}</b> in taxes a year: {savingsWords(s.employeeAnnualTaxSavingsBy)}. State and local taxes count only where that state or city lets the Section 125 deduction lower its taxable wages (New Jersey, Philadelphia and Kentucky cities and counties do not).</p>}
           <div className="kpis">
             <div className="kpi"><div className="l">Eligible employees</div><div className="v">{s.eligibleTotal} <span className="s" style={{ fontSize: '1rem' }}>of {s.employees}</span></div>
@@ -575,6 +588,7 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
             </div>
           )}
           <p className="muted small">Each row is run through every check in plan year {result.settings.year}, with and without the deduction, so Social Security, FUTA and SUI wage bases are applied. Allotment = employee tax savings per month × {Math.round(result.settings.allotmentBuffer * 100)}%. Per-check columns show the first check of the year. Lines that use projected or unverified state data are listed in each employee's flags ({s.dataWarnings} flags in total).</p>
+          </div>
         </>
       )}
 
@@ -587,14 +601,16 @@ function Results({ result, settings, setS, view, setView, meta, busy, onSave, on
             {[['Employees reviewed', s.employees], ['Eligible employees', `${s.eligibleTotal}`], ['Estimated employer savings per year', money(s.employerAnnualSavings.total)], ...(s.adminFee?.annual > 0 ? [['Employer savings after admin fee', money(s.employerNetAnnualSavings)]] : []), ...(s.retirement ? [] : [['Estimated valuation increase', money(s.valuationIncrease)]])].map(([l, v]) => <div key={l} className="kpi"><div className="l">{l}</div><div className="v">{v}</div></div>)}
           </div>
           <h3>How it works</h3>
-          <p>Eligible employees enroll in a pre-tax benefit through the company's Section 125 plan, with a {s.benefitPackage?.name} preventative care package. Because the deduction comes out before taxes, both the employee's and the employer's payroll taxes go down. {s.retirement
+          <p>Eligible employees enroll in a pre-tax benefit through the company's Section 125 plan, with {s.pricingMode === 'tiers' ? 'a preventative care package set by the plan their tax savings support' : `a ${s.benefitPackage?.name} preventative care package`}. Because the deduction comes out before taxes, both the employee's and the employer's payroll taxes go down. {s.retirement
             ? s.retirement.socialSecurity === 'none'
               ? ` The district does not pay Social Security, so it saves Medicare tax (1.45%) on every dollar deducted. ${s.retirement.cafeteriaReductionsCovered ? `${s.retirement.name} counts the deduction as pay, so TRS contributions and pensions stay the same.` : ''}`
               : ` The district saves Social Security (where it is paid) and Medicare tax on every dollar deducted. ${s.retirement.cafeteriaReductionsCovered ? `${s.retirement.name} counts the deduction as pay, so TRS contributions and pensions stay the same.` : ''}`
             : ' The employer saves Social Security and Medicare tax on every dollar deducted.'}</p>
           <h3>Estimated impact</h3>
           <table style={{ maxWidth: 640 }}><tbody>
-            <tr><td>Eligible employees (full plan / part-time plan)</td><td className="num">{s.eligibleFull} / {s.eligiblePartTime}</td></tr>
+            {s.pricingMode === 'tiers'
+              ? (s.tiers ?? []).filter((t: any) => t.id !== 'total' && t.enrolled > 0).map((t: any) => <tr key={t.id}><td>{t.name} plan ({money(t.price)} a month, {t.packageName})</td><td className="num">{t.enrolled}</td></tr>)
+              : <tr><td>Eligible employees (full plan / part-time plan)</td><td className="num">{s.eligibleFull} / {s.eligiblePartTime}</td></tr>}
             <tr><td>Employer payroll tax savings per year</td><td className="num"><b>{money(s.employerAnnualSavings.total)}</b></td></tr>
             {s.adminFee?.annual > 0 && <tr><td>Admin fee per year ({money(s.adminFee.amount)} {s.adminFee.per === 'month' ? 'a month' : 'per enrolled employee a month'})</td><td className="num">−{money(s.adminFee.annual)}</td></tr>}
             {s.adminFee?.annual > 0 && <tr><td>Remaining employer savings per year</td><td className="num"><b>{money(s.employerNetAnnualSavings)}</b></td></tr>}

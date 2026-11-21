@@ -53,7 +53,15 @@ function Employees({ r }: { r: any }) {
       {(!everyone || filter === 'all' || filter === 'eligible') && (
         <div className="fg-card">
           <h3>{plural(r.eligible, 'eligible employee')}</h3>
-          <p className="fg-note">{r.eligibleFull} on the full plan{r.eligiblePartTime ? ` and ${r.eligiblePartTime} on the part-time plan` : ''}. Each pays for a {r.benefitPackage ?? 'preventative care'} benefit with a pre-tax deduction, so both their taxes and the company's go down.</p>
+          {r.plans?.length
+            ? <>
+                <p className="fg-note">Each eligible employee is placed in the plan their tax savings support. Each plan pays for a preventative care benefit with a pre-tax deduction, so both their taxes and the company's go down.</p>
+                <div className="fg-tablebox" style={{ marginBottom: 12 }}><table>
+                  <thead><tr><th>Plan</th><th className="num">Employees</th><th className="num">Price a month</th><th>Benefit</th></tr></thead>
+                  <tbody>{r.plans.map((p: any) => <tr key={p.name}><td>{p.name}</td><td className="num">{p.employees}</td><td className="num">{money(p.monthlyPrice)}</td><td>{p.benefitPackage}</td></tr>)}</tbody>
+                </table></div>
+              </>
+            : <p className="fg-note">{r.eligibleFull} on the full plan{r.eligiblePartTime ? ` and ${r.eligiblePartTime} on the part-time plan` : ''}. Each pays for a {r.benefitPackage ?? 'preventative care'} benefit with a pre-tax deduction, so both their taxes and the company's go down.</p>}
           {r.showEmployees === 'counts' || all.length === 0 ? (
             <div className="fg-tablebox"><table><tbody>
               {r.byReason

@@ -154,6 +154,8 @@ export function buildSnapshot(p: { name: string; company?: string | null; file_n
     participationRate: rate,
     employeeAnnualTaxSavings: s.employeeAnnualTaxSavings,
     benefitPackage: s.benefitPackage?.name,
+    /** Tier pricing: each plan people were placed in, with its price. Margins and benefit costs stay internal. */
+    plans: s.pricingMode === 'tiers' ? (s.tiers ?? []).filter((t) => t.id !== 'total' && t.enrolled > 0).map((t) => ({ name: t.name, employees: t.enrolled, monthlyPrice: t.price, benefitPackage: t.packageName })) : [],
     byStatus: Object.fromEntries(Object.entries(s.byEligibility ?? {}).filter(([k]) => k !== 'Excluded')),
     /** People by client status, and by the rule that decided it (largest group first within a status). */
     statusCounts: { eligible: count('eligible') + count('partTime'), partTime: count('partTime'), review: count('review'), notEligible: count('notEligible') },

@@ -107,3 +107,17 @@ describe('client page: admin fee and voluntary benefits', () => {
     expect(s.employerNetAnnualSavings).toBe(2600.13);
   });
 });
+
+describe('client page: tier pricing', () => {
+  it('lists each plan people were placed in, with its price and package, and no margins', () => {
+    const tiers = [
+      { id: 'plus', name: 'Plus', enrolled: 1, price: 159, benefitCost: 55, packageName: 'MEC', marginPerEmployee: 104, monthlyRevenue: 159, monthlyBenefitCost: 55, monthlyMargin: 104, annualMargin: 1248 },
+      { id: 'essential', name: 'Essential', enrolled: 0, price: 31, benefitCost: 55, packageName: 'MEC', marginPerEmployee: -24, monthlyRevenue: 0, monthlyBenefitCost: 0, monthlyMargin: 0, annualMargin: 0, losesMoney: true },
+      { id: 'total', name: 'Total', enrolled: 1, price: 159, benefitCost: 55, packageName: '', marginPerEmployee: 104, monthlyRevenue: 159, monthlyBenefitCost: 55, monthlyMargin: 104, annualMargin: 1248 },
+    ];
+    const s = buildSnapshot({ ...proposal(), summary: { ...summary, pricingMode: 'tiers', tiers } });
+    expect(s.plans).toEqual([{ name: 'Plus', employees: 1, monthlyPrice: 159, benefitPackage: 'MEC' }]);
+    expect(JSON.stringify(s.plans)).not.toMatch(/margin|benefitCost/i);
+    expect(buildSnapshot(proposal()).plans).toEqual([]);
+  });
+});

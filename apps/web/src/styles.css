@@ -346,3 +346,7 @@ fieldset.fg-plain { border: 0; padding: 0; margin: 0; min-width: 0; }
 .fg-multiples.tall { max-height: 40rem; }
 .fg-multiples td:first-child { white-space: nowrap; }
 .fg-multiples th .fg-subline { font-weight: 400; }
+
+/* Numbers that belong to a previous price while the proposal recalculates: faded and not clickable. */
+.fg-updating { opacity: .4; pointer-events: none; user-select: none; transition: opacity .15s ease; }
+@media (prefers-reduced-motion: reduce) { .fg-updating { transition: none; } }
