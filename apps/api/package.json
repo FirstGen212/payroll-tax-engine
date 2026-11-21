@@ -1,0 +1,33 @@
+{
+  "name": "@pte/api",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "esbuild src/server.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/server.js --external:fastify --external:@fastify/* --external:pg --external:exceljs --external:zod",
+    "prestart": "npm run build",
+    "start": "node dist/server.js",
+    "start:dev": "tsx src/server.ts",
+    "migrate": "tsx src/migrate.ts",
+    "seed": "tsx src/seed.ts",
+    "seed:demo": "tsx src/seed-demo.ts",
+    "import:pa-psd": "tsx src/importers/pa-psd.ts",
+    "import:oh-muni": "tsx src/importers/oh-muni.ts"
+  },
+  "dependencies": {
+    "@fastify/compress": "^9.3.0",
+    "@fastify/cors": "^11.4.3",
+    "@fastify/static": "^10.1.12",
+    "@pte/engine": "0.1.0",
+    "@pte/tax-data": "0.1.0",
+    "exceljs": "^4.4.0",
+    "fastify": "^5.12.8",
+    "pg": "^8.13.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.10",
+    "esbuild": "^0.28.2"
+  }
+}

@@ -1,0 +1,30 @@
+# Render Blueprint: one web service (API + built web app on one URL) and a Postgres database.
+# Render dashboard > New > Blueprint > pick this repository and branch.
+services:
+  - type: web
+    name: payroll-tax-engine
+    runtime: node
+    plan: starter            # always on; "free" also works but sleeps after 15 minutes idle
+    buildCommand: npm ci --include=dev && npm run build -w apps/web && npm run build -w apps/api
+    # The app is compiled to plain JavaScript and run by node alone, which keeps it well inside the plan's 512 MB.
+    # On start it creates/updates the schema and loads the tax database (safe to re-run; client data is kept).
+    startCommand: node apps/api/dist/server.js
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: payroll-db
+          property: connectionString
+      # Setup key: the app asks for this value once, when the first admin account is created.
+      # Render generates it; read it under the service's Environment tab. Everyone signs in with their own account after that.
+      - key: APP_PASSWORD
+        generateValue: true
+
+databases:
+  - name: payroll-db
+    databaseName: payroll
+    plan: basic-256mb        # "free" works for a trial but Render deletes free databases after 30 days
+    ipAllowList: []          # reachable only from Render services
