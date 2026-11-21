@@ -116,6 +116,7 @@ function allotmentSheet(wb: ExcelJS.Workbook, result: ProposalResult): void {
     ['Employee', 28, ''], ['Employee ID', 14, ''], ['Company', 24, ''], ['State', 8, ''], ['Pay schedule', 16, ''], ['Gross per check', 16, 'usd'],
     ['Status', 26, ''], ['Plan', 12, ''], ['Pre-tax deduction per check', 18, 'usd'], ['Employee tax savings per month', 18, 'usd'],
     ['Savings allotment per month', 18, 'usd'], ['Savings allotment per year', 18, 'usd'], ['Employer tax savings per month', 18, 'usd'], ['Employer tax savings per year', 18, 'usd'],
+    ['Add-ons per month', 14, 'usd'], ['Voluntary benefit surplus per month', 18, 'usd'],
     ['Allotment on the full plan (calculated)', 20, 'usd'], ['Why', 70, 'wrap'], ['What would change it', 60, 'wrap'], ['Row in file', 10, ''],
   ];
   const head = ws.addRow(columns.map((c) => c[0]));
@@ -135,6 +136,7 @@ function allotmentSheet(wb: ExcelJS.Workbook, result: ProposalResult): void {
       x.headline ? `${x.status}: ${x.headline}` : x.status, m ? (pt ? 'Part-time' : e.tier?.name ?? 'Full') : '',
       m ? (pt ? e.partTime!.deductionPerCheck : e.deductionPerCheck) : undefined, m?.employeeTaxSavings,
       m?.allotment, m ? Math.round(m.allotment * 12 * 100) / 100 : undefined, m?.employerTaxSavings, m ? Math.round(m.employerTaxSavings * 12 * 100) / 100 : undefined,
+      m && e.voluntary ? e.voluntary.addOnCost : undefined, m ? e.voluntary?.surplus : undefined,
       e.monthly?.allotment, x.tone === 'eligible' ? '' : x.reason, x.suggestions.join(' '), e.row.rowNumber,
     ]);
   }
@@ -147,7 +149,7 @@ function allotmentSheet(wb: ExcelJS.Workbook, result: ProposalResult): void {
       return { formula: `SUM(${letter}2:${letter}${last})`, result: Math.round(total * 100) / 100 };
     };
     const total = ws.addRow([`Total for the ${enrolled} on a plan`]);
-    for (const col of [9, 10, 11, 12, 13, 14]) total.getCell(col).value = sumOf(col);
+    for (const col of [9, 10, 11, 12, 13, 14, 15, 16]) total.getCell(col).value = sumOf(col);
     total.font = { bold: true };
   }
   const rate = result.summary.participationRate ?? 1;
@@ -190,6 +192,11 @@ export async function exportWorkbook(name: string, headers: string[], rawRows: R
     ['Average allotment (full plan)', s.monthlySavings.average],
     ['Employer annual tax savings', s.employerAnnualSavings.total],
     ['Employer savings per employee', s.employerAnnualSavings.perEmployee],
+    ...(s.adminFee?.annual > 0 ? [
+      [`Admin fee per year (${s.adminFee.amount} ${s.adminFee.per === 'month' ? 'a month' : 'per enrolled employee a month'})`, -s.adminFee.annual],
+      ['Remaining employer savings per year', s.employerNetAnnualSavings],
+    ] : []),
+    ...(s.voluntary ? [[s.voluntary.addOns.length ? `Employee savings left after the plan and ${s.voluntary.addOns.map((a) => a.name.toLowerCase()).join(' and ')} (monthly)` : 'Voluntary benefit surplus (monthly)', s.voluntary.surplusMonthly]] : []),
     [`Valuation increase (${result.settings.ebitdaMultiple}x EBITDA)`, s.valuationIncrease],
     ...(s.retirement ? [
       [],
@@ -218,7 +225,7 @@ export async function exportWorkbook(name: string, headers: string[], rawRows: R
   sum.getColumn(2).width = 18;
   sum.eachRow((r) => {
     const first = String(r.getCell(1).value ?? '');
-    if (/savings|allotment|valuation/i.test(first)) r.getCell(2).numFmt = usd;
+    if (/savings|allotment|valuation|fee|surplus/i.test(first)) r.getCell(2).numFmt = usd;
     if (s.byEligibility[first] !== undefined) r.getCell(3).numFmt = '0%';
     const money = typeof r.getCell(1).value === 'number' ? [1, 4, 5, 6, 8] : tierLabels.has(first) ? [3, 4, 5, 6, 8] : [];
     money.forEach((c) => (r.getCell(c).numFmt = usd));

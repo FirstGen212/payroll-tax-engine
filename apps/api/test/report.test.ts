@@ -88,3 +88,22 @@ describe('client proposal page', () => {
     expect(newSlug('!!!', 'ab')).toBe('proposal-ab');
   });
 });
+
+describe('client page: admin fee and voluntary benefits', () => {
+  it('shows employer savings, the admin fee and what is left, and each enrolled employee\'s surplus', () => {
+    const withFee = { ...summary, adminFee: { amount: 10, per: 'employee-month', annual: 240 }, employerNetAnnualSavings: 2360.13, voluntary: { addOns: [{ id: 'dental', name: 'Dental', monthlyCost: 30 }], addOnMonthlyCost: 30, surplusMonthly: 5, shortfalls: 0 } };
+    const res = results.map((e) => (e.name === 'Zed Young' ? { ...e, voluntary: { price: 159, addOns: [], addOnCost: 30, surplus: -39 } } : e));
+    const s = buildSnapshot({ ...proposal(), summary: withFee, results: res });
+    expect(s.adminFee).toEqual({ annual: 240, amount: 10, per: 'employee-month' });
+    expect(s.employerNetAnnualSavings).toBe(2360.13);
+    expect(s.addOns.map((a: any) => a.name)).toEqual(['Dental']);
+    expect(s.employees.find((e) => e.name === 'Zed Young')).toMatchObject({ addOnCost: 30, voluntarySurplus: -39 });
+    expect(s.employeeColumns).toContain('voluntary');
+  });
+
+  it('older proposals with no fee show none', () => {
+    const s = buildSnapshot(proposal());
+    expect(s.adminFee).toBeNull();
+    expect(s.employerNetAnnualSavings).toBe(2600.13);
+  });
+});

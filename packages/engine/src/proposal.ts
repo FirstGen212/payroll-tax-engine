@@ -115,6 +115,24 @@ export interface PricingTier {
   enabled: boolean;
 }
 
+/** A voluntary benefit an employee can add on top of the plan's package, paid from their savings (e.g. dental, vision). */
+export interface VoluntaryBenefit {
+  id: string;
+  name: string;
+  /** Cost per enrolled employee per month. */
+  monthlyCost: number;
+  /** Added to every enrolled employee in this proposal. */
+  selected: boolean;
+}
+
+/** The admin fee the employer pays First Gen, taken out of the employer's tax savings. No standard price. */
+export interface EmployerAdminFee {
+  /** 0 = no fee. */
+  amount: number;
+  /** Per enrolled employee per month, or one flat amount per month. */
+  per: 'employee-month' | 'month';
+}
+
 /** Owners and highly compensated employees are held at or below one tier (nondiscrimination). */
 export interface HceCap {
   enabled: boolean;
@@ -196,6 +214,9 @@ export interface ProposalSettings {
   pricingMode: 'standard' | 'tiers';
   tiers: PricingTier[];
   hceCap: HceCap;
+  /** Optional add-ons (dental, vision). Unselected, each employee's leftover savings show as a voluntary benefit surplus. */
+  voluntaryBenefits: VoluntaryBenefit[];
+  adminFee: EmployerAdminFee;
   /** Employer savings basis: Social Security + Medicare only (7.65%, or Medicare 1.45% where Social Security does not apply), or all employer taxes (adds FUTA, SUI, etc.). */
   employerSavingsBasis: 'fica' | 'all';
   /** Payroll model: a public retirement system the employer reports to (e.g. 'TX_TRS' for a Texas school district). Empty = private employer. */
@@ -261,6 +282,11 @@ export const DEFAULT_PROPOSAL_SETTINGS: ProposalSettings = {
     { id: 'essential', name: 'Essential', deductionByFrequency: { monthly: 520, semimonthly: 260, biweekly: 240, weekly: 120 }, monthlyPrice: 31, allotmentCutoff: 60, benefitPackageId: 'mec', fullTimeRules: false, enabled: true },
   ],
   hceCap: { enabled: true, payOver: 160000, maxTierId: 'standard' },
+  voluntaryBenefits: [
+    { id: 'dental', name: 'Dental', monthlyCost: 30, selected: false },
+    { id: 'vision', name: 'Vision', monthlyCost: 20, selected: false },
+  ],
+  adminFee: { amount: 0, per: 'employee-month' },
   employerSavingsBasis: 'fica',
   retirementSystem: '',
   publicEmployer: { socialSecurityCovered: false, detectSocialSecurity: true, useFileContribution: true, cafeteriaReductionsCovered: true },
@@ -395,6 +421,11 @@ export interface ProposalEmployeeResult extends Partial<PlanCalc> {
   explanation?: EmployeeExplanation;
   /** The reviewer override applied to this row, if any. */
   override?: EmployeeOverride;
+  /**
+   * Enrolled employees: their monthly allotment less the plan price and any selected add-ons. What is left is the
+   * voluntary benefit surplus; negative means the add-ons cost more than their savings cover.
+   */
+  voluntary?: { price: number; addOns: { id: string; name: string; monthlyCost: number }[]; addOnCost: number; surplus: number };
   /** Tier pricing only: the tier the employee was placed in. */
   tier?: { id: string; name: string; deductionPerCheck: number; monthlyPrice: number; allotmentCutoff: number; allotment: number; capped?: string };
 }
@@ -496,6 +527,12 @@ export interface ProposalSummary {
   /** Employer tax savings of eligible employees (basis per settings). */
   employerAnnualSavings: { total: number; full: number; partTime: number; perEmployee: number };
   employeeAnnualTaxSavings: number;
+  /** Employer admin fee a year (0 when none is set), at the participation rate for a per-employee fee. */
+  adminFee: { amount: number; per: EmployerAdminFee['per']; annual: number };
+  /** Employer tax savings less the admin fee: what the employer keeps. Valuation uses this. */
+  employerNetAnnualSavings: number;
+  /** Selected add-ons and the enrolled employees' voluntary benefit surplus a month (sums at the participation rate). */
+  voluntary: { addOns: { id: string; name: string; monthlyCost: number }[]; addOnMonthlyCost: number; surplusMonthly: number; shortfalls: number };
   valuationIncrease: number;
   allotmentDistribution: { below: number; near: number; atOrAbove: number; lowEdge: number; highEdge: number };
   programs: ProgramAnalysis[];
@@ -1272,6 +1309,8 @@ export function runProposal(rows: CensusRow[], settings: Partial<ProposalSetting
     pricingMode: settings.pricingMode === 'tiers' ? 'tiers' : 'standard',
     tiers: (settings.tiers?.length ? settings.tiers : DEFAULT_PROPOSAL_SETTINGS.tiers).map((t) => ({ ...t, deductionByFrequency: { ...(t.deductionByFrequency ?? {}) } })),
     hceCap: { ...DEFAULT_PROPOSAL_SETTINGS.hceCap, ...(settings.hceCap ?? {}) },
+    voluntaryBenefits: settings.voluntaryBenefits?.length ? settings.voluntaryBenefits : DEFAULT_PROPOSAL_SETTINGS.voluntaryBenefits,
+    adminFee: { ...DEFAULT_PROPOSAL_SETTINGS.adminFee, ...(settings.adminFee ?? {}) },
     overrides: settings.overrides ?? {},
     participationRate: settings.participationRate ?? DEFAULT_PROPOSAL_SETTINGS.participationRate,
   };
@@ -1291,6 +1330,17 @@ export function runProposal(rows: CensusRow[], settings: Partial<ProposalSetting
   const skip = new Set(s.dedupe ? duplicates.map((d) => d.rowNumber) : []);
   const employees = rows.filter((r) => !skip.has(r.rowNumber)).map((r) => evaluateEmployee({ ...r }, s, db));
 
+  // Voluntary benefits: each enrolled employee's savings less the plan price and the selected add-ons.
+  const addOns = s.voluntaryBenefits.filter((v) => v.selected && v.monthlyCost > 0).map((v) => ({ id: v.id, name: v.name, monthlyCost: v.monthlyCost }));
+  const addOnCost = r2(addOns.reduce((a, v) => a + v.monthlyCost, 0));
+  for (const e of employees) {
+    const allot = e.eligibility === 'Eligible' ? e.monthly?.allotment : e.eligibility === 'PT Eligible' ? e.partTime?.allotment : undefined;
+    if (allot === undefined) continue;
+    const price = e.eligibility === 'PT Eligible' ? s.partTime.monthlyPrice ?? 0 : e.tier ? e.tier.monthlyPrice : s.allotmentThreshold;
+    e.voluntary = { price, addOns, addOnCost, surplus: r2(allot - price - addOnCost) };
+    if (e.voluntary.surplus < 0 && addOns.length) e.flags.push(`The ${addOns.map((a) => a.name.toLowerCase()).join(' and ')} add-on${addOns.length > 1 ? 's' : ''} (${usd(addOnCost)} a month) cost more than the ${usd(r2(allot - price))} left after the plan price.`);
+  }
+
   const byEligibility: Record<string, number> = {};
   for (const e of employees) byEligibility[e.eligibility] = (byEligibility[e.eligibility] ?? 0) + 1;
   const full = employees.filter((e) => e.eligibility === 'Eligible');
@@ -1308,6 +1358,11 @@ export function runProposal(rows: CensusRow[], settings: Partial<ProposalSetting
   const tiers = s.pricingMode === 'tiers' ? analyzeTiers(employees, s.tiers, s.benefitPackages) : undefined;
 
   const erTotal = r2((erFull + erPt) * rate);
+  const enrolledCount = Math.round((full.length + pt.length) * rate);
+  const fee = Math.max(0, s.adminFee.amount || 0);
+  const feeAnnual = r2(s.adminFee.per === 'month' ? (enrolledCount ? fee * 12 : 0) : fee * 12 * (full.length + pt.length) * rate);
+  const erNet = r2(erTotal - feeAnnual);
+  const withVol = employees.filter((e) => e.voluntary);
   const freqCount = new Map<PayFrequency, number>();
   for (const e of [...full, ...pt]) if (e.frequency) freqCount.set(e.frequency, (freqCount.get(e.frequency) ?? 0) + 1);
   const topFreq = [...freqCount.entries()].sort((a, b) => b[1] - a[1])[0];
@@ -1333,7 +1388,10 @@ export function runProposal(rows: CensusRow[], settings: Partial<ProposalSetting
       monthlySavings: { total: r2((msFull + msPt) * rate), full: r2(msFull * rate), partTime: r2(msPt * rate), average: full.length ? r2(msFull / full.length) : 0, annual: r2((msFull + msPt) * 12 * rate) },
       employerAnnualSavings: { total: erTotal, full: r2(erFull * rate), partTime: r2(erPt * rate), perEmployee: full.length ? r2(erFull / full.length) : 0 },
       employeeAnnualTaxSavings: r2(sum(full.map((e) => e.monthly!.employeeTaxSavings * 12).concat(pt.map((e) => e.partTime!.calc.monthly.employeeTaxSavings * 12))) * rate),
-      valuationIncrease: r2(erTotal * s.ebitdaMultiple),
+      adminFee: { amount: fee, per: s.adminFee.per, annual: feeAnnual },
+      employerNetAnnualSavings: erNet,
+      voluntary: { addOns, addOnMonthlyCost: addOnCost, surplusMonthly: r2(withVol.reduce((a, e) => a + e.voluntary!.surplus, 0) * rate), shortfalls: withVol.filter((e) => e.voluntary!.surplus < 0).length },
+      valuationIncrease: r2(erNet * s.ebitdaMultiple),
       allotmentDistribution: {
         below: withAllot.filter((e) => e.monthly!.allotment < lowEdge).length,
         near: withAllot.filter((e) => e.monthly!.allotment >= lowEdge && e.monthly!.allotment < s.allotmentThreshold).length,

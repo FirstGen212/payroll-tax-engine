@@ -10,7 +10,12 @@ const COLS: Record<string, [string, (e: any) => string, boolean?]> = {
   deduction: ['Pre-tax deduction per check', (e) => money(e.deductionPerCheck), true],
   employeeSavings: ['Employee savings per month', (e) => money(e.employeeMonthlySavings), true],
   employerSavings: ['Employer savings per year', (e) => money(e.employerAnnualSavings), true],
+  addOns: ['Add-ons per month', (e) => (e.addOnCost === undefined ? '' : money(e.addOnCost)), true],
+  voluntary: ['Voluntary benefit surplus per month', (e) => (e.voluntarySurplus === undefined ? '' : money(e.voluntarySurplus)), true],
 };
+/** With add-ons chosen, the surplus column shows what is left after them, next to their cost. */
+const columnsFor = (r: any): string[] => (r.employeeColumns ?? []).flatMap((c: string) => (c === 'voluntary' && r.addOns?.length ? ['addOns', 'voluntary'] : [c]));
+const colLabel = (r: any, c: string) => (c === 'voluntary' && r.addOns?.length ? 'Surplus after add-ons per month' : c === 'addOns' && r.addOns?.length ? `${r.addOns.map((a: any) => a.name).join(' + ')} per month` : COLS[c]?.[0]);
 
 const TONE_BADGE: Record<string, string> = { eligible: 'b-ok', partTime: 'b-ok', review: 'b-warn', notEligible: 'b-neutral' };
 /** Links published before statuses existed list only eligible employees and carry no tone. */
@@ -28,7 +33,7 @@ function Employees({ r }: { r: any }) {
   const enrolled = shown.filter((e) => group(e) === 'eligible');
   const others = shown.filter((e) => group(e) !== 'eligible');
   const n = { all: all.length, eligible: all.filter((e) => group(e) === 'eligible').length, review: all.filter((e) => group(e) === 'review').length, notEligible: all.filter((e) => group(e) === 'notEligible').length };
-  const cols: string[] = r.employeeColumns;
+  const cols: string[] = columnsFor(r);
   const whyNot: any[] = (r.byReason ?? []).filter((x: any) => x.tone === 'review' || x.tone === 'notEligible');
   const filtered = filter !== 'all' || !!want;
   return (
@@ -57,7 +62,7 @@ function Employees({ r }: { r: any }) {
             </tbody></table></div>
           ) : enrolled.length > 0 ? (
             <div className="fg-tablebox tall"><table>
-              <thead><tr><th>Employee</th>{cols.map((c) => <th key={c} className={COLS[c]?.[2] ? 'num' : ''}>{COLS[c]?.[0]}</th>)}</tr></thead>
+              <thead><tr><th>Employee</th>{cols.map((c) => <th key={c} className={COLS[c]?.[2] ? 'num' : ''}>{colLabel(r, c)}</th>)}</tr></thead>
               <tbody>{enrolled.map((e, i) => (
                 <tr key={i}>
                   <td><b>{e.name}</b>{e.suggestions?.length > 0 && <span className="fg-subline">{e.suggestions.join(' ')}</span>}</td>
@@ -111,13 +116,15 @@ export function ReportView({ r, preview }: { r: any; preview?: boolean }) {
         <p className="fg-eyebrow">Presented by {r.presentedBy} · {r.subtitle}</p>
         <h1 className="fg-title">{r.title}</h1>
         <p className="fg-takeaway">
-          <b>{r.eligible}</b> of {r.company}'s <b>{r.employeesReviewed}</b> employees qualify. Together they save the company about <b>{whole(r.employerAnnualSavings)}</b> a year in payroll taxes{r.showValuation && r.ebitdaMultiple ? <>, worth about <b>{whole(r.valuationIncrease)}</b> in business value</> : null}.
+          <b>{r.eligible}</b> of {r.company}'s <b>{r.employeesReviewed}</b> employees qualify. Together they save the company about <b>{whole(r.employerAnnualSavings)}</b> a year in payroll taxes{r.adminFee ? <>, <b>{whole(r.employerNetAnnualSavings)}</b> after the admin fee</> : null}{r.showValuation && r.ebitdaMultiple ? <>, worth about <b>{whole(r.valuationIncrease)}</b> in business value</> : null}.
         </p>
         {r.intro && <p className="fg-takeaway" style={{ marginTop: 12 }}>{r.intro}</p>}
       </div>
 
       <div className="kpis">
-        <div className="kpi"><div className="l">Employer annual savings</div><div className="v">{whole(r.employerAnnualSavings)}</div><div className="s"><b>{money(r.perPeriodSavings)}</b> every {r.payFrequency.label.toLowerCase()} pay period</div></div>
+        {r.adminFee
+          ? <div className="kpi"><div className="l">Employer savings after admin fee</div><div className="v">{whole(r.employerNetAnnualSavings)}</div><div className="s"><b>{whole(r.employerAnnualSavings)}</b> savings − <b>{whole(r.adminFee.annual)}</b> admin fee a year</div></div>
+          : <div className="kpi"><div className="l">Employer annual savings</div><div className="v">{whole(r.employerAnnualSavings)}</div><div className="s"><b>{money(r.perPeriodSavings)}</b> every {r.payFrequency.label.toLowerCase()} pay period</div></div>}
         {r.showValuation && <div className="kpi"><div className="l">Valuation increase</div><div className="v">{whole(r.valuationIncrease)}</div><div className="s">at a <b>{r.ebitdaMultiple}x</b> EBITDA multiple</div></div>}
         <div className="kpi"><div className="l">Eligible employees</div><div className="v">{r.eligible}</div><div className="s">of <b>{r.employeesReviewed}</b> reviewed{r.eligiblePartTime ? <>, {r.eligiblePartTime} on the part-time plan</> : null}</div></div>
         <div className="kpi"><div className="l">Pay frequency</div><div className="v">{r.payFrequency.label}</div><div className="s"><b>{r.payFrequency.periodsPerYear}</b> pay periods per year</div></div>
@@ -150,13 +157,20 @@ export function ReportView({ r, preview }: { r: any; preview?: boolean }) {
           <h3>Total employer annual savings</h3>
           <div className="fg-num">{whole(r.employerAnnualSavings)}</div>
           <p className="fg-note" style={{ marginBottom: 0 }}>The total annual payroll tax savings across all eligible employees for {r.company}, equal to <b>{money(r.perPeriodSavings)}</b> every {r.payFrequency.label.toLowerCase()} pay period.</p>
+          {r.adminFee && (
+            <div className="fg-tablebox" style={{ marginTop: 12 }}><table><tbody>
+              <tr><td>Employer payroll tax savings</td><td className="num">{money(r.employerAnnualSavings)}</td></tr>
+              <tr><td>Admin fee ({money(r.adminFee.amount)} {r.adminFee.per === 'month' ? 'a month' : 'per enrolled employee a month'})</td><td className="num">−{money(r.adminFee.annual)}</td></tr>
+              <tr className="fg-all"><td>Remaining employer savings</td><td className="num">{money(r.employerNetAnnualSavings)}</td></tr>
+            </tbody></table></div>
+          )}
           {r.publicRetirement && <p className="fg-note" style={{ marginBottom: 0 }}>{publicRetirementNote(r)}</p>}
         </div>
         {r.showValuation && (
           <div className="fg-card">
             <h3>Valuation impact</h3>
             <div className="fg-num">{whole(r.valuationIncrease)}</div>
-            <p className="fg-note" style={{ marginBottom: 0 }}>Based on a <b>{r.ebitdaMultiple}x</b> EBITDA multiple, this is the potential increase in business value from the added annual earnings.{r.multipleNote ? ` ${r.multipleNote}` : ''}</p>
+            <p className="fg-note" style={{ marginBottom: 0 }}>Based on a <b>{r.ebitdaMultiple}x</b> EBITDA multiple, this is the potential increase in business value from the added annual earnings{r.adminFee ? ' after the admin fee' : ''}.{r.multipleNote ? ` ${r.multipleNote}` : ''}</p>
           </div>
         )}
       </section>

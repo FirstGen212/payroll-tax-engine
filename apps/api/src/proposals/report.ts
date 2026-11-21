@@ -10,7 +10,7 @@ export interface ReportSettings {
   /** What the employee section shows: nothing, counts by status, the eligible employees, or everyone with their status and the reason. */
   showEmployees: 'none' | 'counts' | 'list' | 'all';
   /** Columns of the employee list. */
-  employeeColumns: ('state' | 'plan' | 'deduction' | 'employeeSavings' | 'employerSavings')[];
+  employeeColumns: ('state' | 'plan' | 'deduction' | 'employeeSavings' | 'employerSavings' | 'voluntary')[];
   showValuation: boolean;
   showCompanies: boolean;
   /** Show the uploaded file's name next to "Last updated". */
@@ -30,7 +30,7 @@ export const DEFAULT_REPORT_SETTINGS: ReportSettings = {
   subtitle: 'First Gen Health Summary',
   intro: '',
   showEmployees: 'all',
-  employeeColumns: ['plan', 'deduction', 'employeeSavings', 'employerSavings'],
+  employeeColumns: ['plan', 'deduction', 'employeeSavings', 'voluntary', 'employerSavings'],
   showValuation: true,
   showCompanies: true,
   showSource: true,
@@ -55,7 +55,7 @@ export const ReportSettingsIn = z.object({
   subtitle: z.string().max(160),
   intro: z.string().max(2000),
   showEmployees: z.enum(['none', 'counts', 'list', 'all']),
-  employeeColumns: z.array(z.enum(['state', 'plan', 'deduction', 'employeeSavings', 'employerSavings'])).max(5),
+  employeeColumns: z.array(z.enum(['state', 'plan', 'deduction', 'employeeSavings', 'employerSavings', 'voluntary'])).max(6),
   showValuation: z.boolean(),
   showCompanies: z.boolean(),
   showSource: z.boolean(),
@@ -137,6 +137,11 @@ export function buildSnapshot(p: { name: string; company?: string | null; file_n
     ebitdaMultiple: p.settings?.ebitdaMultiple,
     multipleNote: multipleNote(p.settings?.multipleInfo),
     employerAnnualSavings: s.employerAnnualSavings.total,
+    // Proposals calculated before the admin fee existed have none.
+    adminFee: s.adminFee && s.adminFee.annual > 0 ? { annual: s.adminFee.annual, amount: s.adminFee.amount, per: s.adminFee.per } : null,
+    employerNetAnnualSavings: s.employerNetAnnualSavings ?? s.employerAnnualSavings.total,
+    netPerPeriodSavings: Math.round(((s.employerNetAnnualSavings ?? s.employerAnnualSavings.total) / periods) * 100) / 100,
+    addOns: s.voluntary?.addOns ?? [],
     valuationIncrease: s.valuationIncrease,
     perPeriodSavings: Math.round((s.employerAnnualSavings.total / periods) * 100) / 100,
     payFrequency: { label: FREQ_LABEL[s.payFrequency?.frequency ?? 'biweekly'] ?? 'Bi-Weekly', periodsPerYear: periods },
@@ -173,6 +178,7 @@ export function buildSnapshot(p: { name: string; company?: string | null; file_n
             deductionPerCheck: pt ? e.partTime!.deductionPerCheck : e.perPeriod?.firstGen,
             employeeMonthlySavings: pt ? e.partTime!.allotment : m.allotment,
             employerAnnualSavings: Math.round(m.employerTaxSavings * 12 * 100) / 100,
+            ...(e.voluntary ? { addOnCost: e.voluntary.addOnCost, voluntarySurplus: e.voluntary.surplus } : {}),
           } : {}),
         };
       })
