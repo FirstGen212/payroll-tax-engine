@@ -132,7 +132,7 @@ function allotmentSheet(wb: ExcelJS.Workbook, result: ProposalResult): void {
     if (m) enrolled++;
     ws.addRow([
       e.name, e.row.employeeId ?? '', e.row.company ?? '', e.row.workState ?? '', e.frequency ? PAY_SCHEDULE[e.frequency] ?? e.frequency : '', e.perPeriod?.gross,
-      x.headline ? `${x.status}: ${x.headline}` : x.status, m ? (pt ? 'Part-time' : 'Full') : '',
+      x.headline ? `${x.status}: ${x.headline}` : x.status, m ? (pt ? 'Part-time' : e.tier?.name ?? 'Full') : '',
       m ? (pt ? e.partTime!.deductionPerCheck : e.deductionPerCheck) : undefined, m?.employeeTaxSavings,
       m?.allotment, m ? Math.round(m.allotment * 12 * 100) / 100 : undefined, m?.employerTaxSavings, m ? Math.round(m.employerTaxSavings * 12 * 100) / 100 : undefined,
       e.monthly?.allotment, x.tone === 'eligible' ? '' : x.reason, x.suggestions.join(' '), e.row.rowNumber,
@@ -202,18 +202,27 @@ export async function exportWorkbook(name: string, headers: string[], rawRows: R
     ] : []),
     ...(multipleNote(result.settings.multipleInfo) ? [['Multiple', multipleNote(result.settings.multipleInfo)]] : []),
     [],
-    ['Program price', 'Eligible', 'Monthly revenue', 'Benefit cost', 'Monthly margin', 'Margin %', '12-month margin'],
-    ...s.programs.map((p) => [p.price, p.eligible, p.monthlyRevenue, p.monthlyBenefitCost, p.monthlyMargin, p.marginPercent, p.annualMargin]),
+    ...(s.tiers ? [
+      ['Tier', 'Enrolled', 'Price a month', 'Benefit cost each', 'Monthly revenue', 'Monthly margin', 'Margin %', '12-month margin'],
+      ...s.tiers.map((t) => [t.id === 'total' ? t.name : t.losesMoney ? `${t.name} (loses money)` : t.name, t.enrolled, t.id === 'total' ? null : t.price, t.id === 'total' ? null : t.benefitCost, t.monthlyRevenue, t.monthlyMargin, t.marginPercent, t.annualMargin]),
+    ] : [
+      ['Program price', 'Full plan', 'Part-time plan', 'Monthly revenue', 'Benefit cost', 'Monthly margin', 'Margin %', '12-month margin'],
+      ...s.programs.map((p) => [p.price, p.eligible, p.partTimeEligible ?? 0, p.monthlyRevenue, p.monthlyBenefitCost, p.monthlyMargin, p.marginPercent, p.annualMargin]),
+    ]),
     [],
     ['Estimates from the payroll tax engine; tax lines marked projected or unverified are not yet checked against agency sources.'],
   ]);
+  // Tier rows hold the tier's name in column 1; program rows hold the price.
+  const tierLabels = new Set((s.tiers ?? []).map((t) => (t.id === 'total' ? t.name : t.losesMoney ? `${t.name} (loses money)` : t.name)));
   sum.getColumn(1).width = 52;
   sum.getColumn(2).width = 18;
   sum.eachRow((r) => {
     const first = String(r.getCell(1).value ?? '');
     if (/savings|allotment|valuation/i.test(first)) r.getCell(2).numFmt = usd;
     if (s.byEligibility[first] !== undefined) r.getCell(3).numFmt = '0%';
-    if (typeof r.getCell(1).value === 'number') { [1, 3, 4, 5, 7].forEach((c) => (r.getCell(c).numFmt = usd)); r.getCell(6).numFmt = '0.0%'; }
+    const money = typeof r.getCell(1).value === 'number' ? [1, 4, 5, 6, 8] : tierLabels.has(first) ? [3, 4, 5, 6, 8] : [];
+    money.forEach((c) => (r.getCell(c).numFmt = usd));
+    if (money.length) r.getCell(7).numFmt = '0.0%';
   });
 
   const ws = wb.addWorksheet('Underwriting');

@@ -169,7 +169,7 @@ export function buildSnapshot(p: { name: string; company?: string | null; file_n
           suggestions: x.suggestions,
           // Amounts only for people on a plan: a figure next to someone who is not enrolled would read as a promise.
           ...(enrolled && m ? {
-            plan: pt ? 'Part-time' : 'Full',
+            plan: pt ? 'Part-time' : e.tier?.name ?? 'Full',
             deductionPerCheck: pt ? e.partTime!.deductionPerCheck : e.perPeriod?.firstGen,
             employeeMonthlySavings: pt ? e.partTime!.allotment : m.allotment,
             employerAnnualSavings: Math.round(m.employerTaxSavings * 12 * 100) / 100,
