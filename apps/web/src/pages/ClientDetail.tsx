@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api, money, pct } from '../api';
-import { Badge, LocalPicker, PageHead, StateSelect } from '../components';
+import { useCan } from '../auth';
+import { Badge, LocalPicker, PageHead, StateSelect, useReference } from '../components';
 
 export default function ClientDetail() {
   const { id } = useParams();
@@ -13,14 +14,14 @@ export default function ClientDetail() {
   return (
     <>
       <PageHead eyebrow={<><Link to="/">Clients</Link> / Client</>} title={client.name}>
-        FEIN <b>{client.fein || '—'}</b>, home state <b>{client.home_state}</b>, paid <b>{client.pay_frequency}</b>{client.current_vendor ? <> through <b>{client.current_vendor}</b></> : null}.
+        FEIN <b>{client.fein || '—'}</b>, home state <b>{client.home_state}</b>, paid <b>{client.pay_frequency}</b>{client.current_vendor ? <> through <b>{client.current_vendor}</b></> : null}{client.retirement_system ? <>, reports to <b>{client.retirement_system.replace('TX_', 'Texas ')}</b> {client.social_security_covered ? 'with' : 'without'} <b>Social Security</b></> : null}.
       </PageHead>
       <div className="tabs">
         {[['employees', 'Employees'], ['locations', 'Work locations'], ['taxes', 'Tax setup and toggles'], ['runs', 'Pay runs']].map(([k, l]) => <button key={k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>)}
       </div>
       {tab === 'employees' && <Employees clientId={id!} />}
       {tab === 'locations' && <Locations client={client} reload={load} />}
-      {tab === 'taxes' && <TaxSetup clientId={id!} />}
+      {tab === 'taxes' && <><PayrollModel client={client} reload={load} /><TaxSetup clientId={id!} /></>}
       {tab === 'runs' && <Runs clientId={id!} />}
     </>
   );
@@ -111,6 +112,44 @@ function Runs({ clientId }: { clientId: string }) {
     <div className="panel">
       <table><thead><tr><th>Check date</th><th>Type</th><th>Vendor profile</th><th>Label</th><th className="num">Gross</th><th className="num">Net</th><th className="num">Employer cost</th></tr></thead>
         <tbody>{rows.map((r) => <tr key={r.id}><td><Link to={`/payruns/${r.id}`}>{String(r.check_date).slice(0, 10)}</Link></td><td>{r.run_type}</td><td>{r.vendor_profile_id ?? 'generic'}</td><td>{r.label}</td><td className="num">{money(r.totals?.gross)}</td><td className="num">{money(r.totals?.net)}</td><td className="num">{money(r.totals?.employerCost)}</td></tr>)}</tbody></table>
+    </div>
+  );
+}
+
+/** Public employers: the retirement system the client reports to and whether it pays Social Security. New proposals for the client start from this. */
+function PayrollModel({ client, reload }: { client: any; reload: () => void }) {
+  const ref = useReference();
+  const can = useCan();
+  const [f, setF] = useState({ retirementSystem: client.retirement_system ?? '', socialSecurityCovered: client.social_security_covered ?? true });
+  const [msg, setMsg] = useState('');
+  const systems = (ref?.retirementSystems ?? []).filter((r: any) => r.status === 'published');
+  const save = async () => {
+    setMsg('');
+    try {
+      await api(`/clients/${client.id}`, { method: 'PUT', json: {
+        name: client.name, fein: client.fein, homeState: client.home_state, payFrequency: client.pay_frequency, futaExempt: f.retirementSystem ? true : client.futa_exempt,
+        employeeCount: client.employee_count ?? undefined, currentVendor: client.current_vendor, withholdResidentLocal: client.withhold_resident_local, notes: client.notes,
+        retirementSystem: f.retirementSystem || null, socialSecurityCovered: f.retirementSystem ? f.socialSecurityCovered : true,
+      } });
+      setMsg('Saved. New proposals for this client start with this model.');
+      reload();
+    } catch (e: any) { setMsg(e.message); }
+  };
+  return (
+    <div className="panel">
+      <h3>Payroll model</h3>
+      <p className="fg-note">For a school district or other public employer: the retirement system it reports to, and whether it pays Social Security. Most Texas school districts have no Section 218 agreement, so staff pay Medicare but not Social Security.</p>
+      <fieldset className="fg-plain" disabled={!can('clients.edit')}>
+        <div className="row" style={{ alignItems: 'flex-end' }}>
+          <label>Retirement system<select value={f.retirementSystem} onChange={(e) => setF({ ...f, retirementSystem: e.target.value, socialSecurityCovered: e.target.value ? false : true })}>
+            <option value="">None (private employer)</option>
+            {systems.map((r: any) => <option key={r.code} value={r.code}>{r.name} ({(r.memberRate * 100).toFixed(2)}% member)</option>)}
+          </select></label>
+          {f.retirementSystem && <label className="check"><input type="checkbox" checked={f.socialSecurityCovered} onChange={(e) => setF({ ...f, socialSecurityCovered: e.target.checked })} />Pays Social Security (Section 218 agreement)</label>}
+          <button className="primary" onClick={save}>Save</button>
+          {msg && <span className="muted small">{msg}</span>}
+        </div>
+      </fieldset>
     </div>
   );
 }

@@ -2,7 +2,7 @@
 import { pool, q } from './db.js';
 
 async function client(name: string, homeState: string, payFrequency: string, extra: Record<string, unknown> = {}) {
-  const [c] = await q('insert into client(name,home_state,pay_frequency,futa_exempt,current_vendor,notes) values($1,$2,$3,$4,$5,$6) returning id', [name, homeState, payFrequency, extra.futaExempt ?? false, extra.vendor ?? null, 'Demo data (fictional)']);
+  const [c] = await q('insert into client(name,home_state,pay_frequency,futa_exempt,current_vendor,notes,retirement_system,social_security_covered) values($1,$2,$3,$4,$5,$6,$7,$8) returning id', [name, homeState, payFrequency, extra.futaExempt ?? false, extra.vendor ?? null, 'Demo data (fictional)', extra.retirementSystem ?? null, extra.socialSecurityCovered ?? true]);
   return c.id as string;
 }
 async function location(clientId: string, label: string, state: string, locals: string[]) {
@@ -24,7 +24,7 @@ export async function seedDemo() {
   await employee(a, { first: 'James', last: 'Okafor', rate: 22.5, hours: 40, resState: 'NY', resLocals: ['NY-YONKERS'], w4: { version: 'pre2020', filingStatus: 'mfj', allowances: 3 }, stateW4: { NY: { allowances: 3, filingStatus: 'mfj' } }, work: [{ locationId: yk, state: 'NY', percent: 1 }], deductions: [{ code: '401K', percent: 0.04 }] });
   await employee(a, { first: 'Ana', last: 'Reyes', rate: 20, hours: 38, resState: 'NJ', w4: { version: '2020+', filingStatus: 'single' }, stateW4: { NJ: {}, NY: {} }, work: [{ locationId: bx, state: 'NY', locals: ['NY-NYC'], percent: 1 }] });
 
-  const b = await client('Demo Independent School District (TX)', 'TX', 'monthly', { futaExempt: true });
+  const b = await client('Demo Independent School District (TX)', 'TX', 'monthly', { futaExempt: true, retirementSystem: 'TX_TRS', socialSecurityCovered: false });
   const campus = await location(b, 'High school campus', 'TX', []);
   await employee(b, { first: 'Linda', last: 'Garcia', payType: 'salary', rate: 5200, resState: 'TX', ss: false, birth: '1964-05-02', w4: { version: '2020+', filingStatus: 'mfj' }, work: [{ locationId: campus, state: 'TX', percent: 1 }], deductions: [{ code: '401A_PICKUP', rs: 'TX_TRS' }, { code: '403B', amount: 500 }, { code: 'MED_125', amount: 220 }] });
   await employee(b, { first: 'Robert', last: 'Nguyen', payType: 'salary', rate: 4800, resState: 'TX', ss: false, w4: { version: '2020+', filingStatus: 'single' }, work: [{ locationId: campus, state: 'TX', percent: 1 }], deductions: [{ code: '401A_PICKUP', rs: 'TX_TRS' }, { code: 'HSA_125', amount: 150 }] });

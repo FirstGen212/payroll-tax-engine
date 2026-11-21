@@ -134,8 +134,10 @@ export function calculatePay(input: PayInput, db: TaxDatabase = loadTaxDatabase(
         notes.push(`${rs.name}: member rate ${(rs.memberRate * 100).toFixed(2)}% (${rs.status})`);
       } else warnings.push(`Unknown retirement system ${l.retirementSystem}`);
     }
+    // A retirement system that counts Section 125 reductions as pay (Texas TRS) takes its rate on gross, whatever the vendor's habit.
+    const rsCovers125 = l.retirementSystem ? RETSYS.get(l.retirementSystem)?.cafeteriaReductionsCovered === true : false;
     if (pctRate !== undefined) {
-      const base = conv.percentDeductionBase === 'gross_less_125' ? cashGross - s125Total() : cashGross;
+      const base = conv.percentDeductionBase === 'gross_less_125' && !rsCovers125 ? cashGross - s125Total() : cashGross;
       amount = rnd(base * pctRate);
       notes.push(`${(pctRate * 100).toFixed(3)}% of ${base.toFixed(2)}`);
     }

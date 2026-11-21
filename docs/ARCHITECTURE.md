@@ -50,6 +50,20 @@ The valuation increase on a proposal is employer savings times an EBITDA multipl
 - Every row keeps its source, date and basis (`published`, `derived`, `custom`). Nothing is invented. An edit (`PUT /api/multiples/:id`, permission `rules.edit`) marks the cell `custom` and keeps the sourced figure so it can be reset. Re-seeding never overwrites an edited cell.
 - At calculation the server fills the multiple in from the proposal's industry, ownership and size (`withTableMultiple`) and records where it came from in `settings.multipleInfo`. A multiple the reviewer typed (`multipleAuto: false`) or an industry that is not in the table (older proposals) is left alone. The client page and the export show one line on the source.
 
+## Public employers: the Texas TRS payroll model
+
+A proposal (and a client) can use a public retirement system as its payroll model: `settings.retirementSystem = 'TX_TRS'` with `settings.publicEmployer`. Only systems whose rates were read from the agency (status `published`) are offered in the app; the others in `RETIREMENT_SYSTEMS` are still unverified.
+
+What the TRS model changes, and why (sources are on the `TX_TRS` row in `packages/tax-data/src/benefits.ts`):
+
+- **Member contribution 8.25%** is added to every row as a `401A_PICKUP` deduction (414(h)(2) pick-up: out of federal income tax wages, still in Medicare and Social Security wages). It is taken on pay before any Section 125 deduction, entered as an amount so a vendor's percent base cannot net out Section 125. A mapped TRS column (`retirementSystemContribution`, per check) is used when it has an amount.
+- **Social Security**: off unless the district has a Section 218 agreement (`publicEmployer.socialSecurityCovered`, stored per client as `client.social_security_covered`). A row whose file shows Social Security withheld (`socialSecurityPaid`) is treated as covered when `detectSocialSecurity` is on. Medicare is always on (mandatory for hires after March 31, 1986). So for most districts employer savings are 1.45% Medicare on each dollar deducted, and employee savings are income tax plus 1.45%.
+- **TRS stays whole**: TRS counts qualifying Section 125 salary reductions as compensation (34 TAC 25.21(c)(5), 25.22), so the First Gen deduction does not lower member or employer TRS contributions or the pension. `cafeteriaReductionsCovered: false` models a plan TRS would not count (contributions fall with the deduction); each result then shows the lower TRS amounts.
+- **FUTA**: governments are exempt, so switching to the model turns FUTA off.
+- **Valuation**: a public employer has no EBITDA, so results, the printable summary and the client page leave the valuation out.
+
+Rates are FY2027 (Sept 1, 2026 to Aug 31, 2027): member 8.25%, state 8.25%, public education employer 2%, employer TRS-Care 0.75%, member TRS-Care 0.65%. The return-to-work surcharges (16.5% pension, $535 TRS-Care) are employer costs for rehired retirees and are not modeled.
+
 ## Vendor learning
 
 `learnVendorProfile(vendor, samples)` runs each sample paycheck through every combination of conventions in `CONVENTION_SEARCH_SPACE` and keeps the combination with the smallest total difference from the provider's actual tax amounts. It reports per-dimension evidence and the residual lines no convention explains, which point to setup differences (wrong SUI rate, missing local, W-4 data).

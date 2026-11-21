@@ -150,6 +150,7 @@ export function ReportView({ r, preview }: { r: any; preview?: boolean }) {
           <h3>Total employer annual savings</h3>
           <div className="fg-num">{whole(r.employerAnnualSavings)}</div>
           <p className="fg-note" style={{ marginBottom: 0 }}>The total annual payroll tax savings across all eligible employees for {r.company}, equal to <b>{money(r.perPeriodSavings)}</b> every {r.payFrequency.label.toLowerCase()} pay period.</p>
+          {r.publicRetirement && <p className="fg-note" style={{ marginBottom: 0 }}>{publicRetirementNote(r)}</p>}
         </div>
         {r.showValuation && (
           <div className="fg-card">
@@ -193,4 +194,14 @@ export default function PublicReport() {
   if (err) return <div className="fg-login"><div className="fg-login-card"><LogoOrName presenter="First Gen Financial" /><h1>Link not available</h1><p className="muted">{err}</p></div></div>;
   if (!r) return <div className="fg-login"><span className="muted">Loading…</span></div>;
   return <ReportView r={r} />;
+}
+
+/** One sentence on how a public employer's savings work: Medicare only without Social Security, and the pension stays whole. */
+function publicRetirementNote(r: any): string {
+  const p = r.publicRetirement;
+  const ss = p.socialSecurity === 'none' ? `${r.company} does not pay Social Security, so the savings come from Medicare tax (1.45%) on each dollar set aside.`
+    : p.socialSecurity === 'some' ? 'Savings include Social Security only for the positions that pay it today; for everyone else they come from Medicare tax (1.45%).'
+    : 'Savings include Social Security and Medicare tax (7.65%) on each dollar set aside.';
+  const pension = p.cafeteriaReductionsCovered ? ` ${p.name} counts the benefit deduction as pay, so retirement contributions and pensions stay the same.` : '';
+  return ss + pension;
 }
