@@ -67,6 +67,10 @@ export interface CensusRow {
   reimbursements?: number;
   confidence?: number;
   birthDate?: string;
+  /** Owner of the business (or a 5%+ owner). Capped at the HCE tier in tier pricing. */
+  owner?: boolean | null;
+  /** Prior-year compensation, for the highly compensated employee (HCE) test in tier pricing. */
+  priorYearPay?: number;
 }
 
 export interface BenefitPackage {
@@ -85,6 +89,57 @@ export interface PartTimePlan {
   /** Triggers: average hours per week at or below this, or annual gross below maxAnnualGross. */
   maxHoursPerWeek: number;
   maxAnnualGross: number;
+  /** What First Gen charges per part-time enrollee per month (counted as revenue in the margin analyzer). */
+  monthlyPrice?: number;
+  /** Benefit package the part-time plan carries (its cost is taken off the part-time revenue). */
+  benefitPackageId?: string;
+}
+
+/**
+ * One tier of the optional tier pricing: its own deduction per check, price and the savings it needs.
+ * In tier mode every employee is auto-enrolled into the highest tier their own savings cover.
+ */
+export interface PricingTier {
+  id: string;
+  name: string;
+  /** First Gen deduction per check by pay frequency. Other frequencies get the semi-monthly year spread over their checks. */
+  deductionByFrequency: Partial<Record<PayFrequency, number>>;
+  /** What First Gen charges per enrollee per month. */
+  monthlyPrice: number;
+  /** Monthly allotment an employee needs on this tier's deduction to be placed in it. */
+  allotmentCutoff: number;
+  /** Benefit package the tier carries; its cost comes off the price for the margin. */
+  benefitPackageId: string;
+  /** The low-income and minimum-hours rules apply to this tier (the full-time rules). */
+  fullTimeRules: boolean;
+  enabled: boolean;
+}
+
+/** A voluntary benefit an employee can add on top of the plan's package, paid from their savings (e.g. dental, vision). */
+export interface VoluntaryBenefit {
+  id: string;
+  name: string;
+  /** Cost per enrolled employee per month. */
+  monthlyCost: number;
+  /** Added to every enrolled employee in this proposal. */
+  selected: boolean;
+}
+
+/** The admin fee the employer pays First Gen, taken out of the employer's tax savings. No standard price. */
+export interface EmployerAdminFee {
+  /** 0 = no fee. */
+  amount: number;
+  /** Per enrolled employee per month, or one flat amount per month. */
+  per: 'employee-month' | 'month';
+}
+
+/** Owners and highly compensated employees are held at or below one tier (nondiscrimination). */
+export interface HceCap {
+  enabled: boolean;
+  /** Prior-year pay above this makes an employee an HCE (IRC 414(q): $160,000 for 2026). */
+  payOver: number;
+  /** Highest tier an owner or HCE can be placed in. */
+  maxTierId: string;
 }
 
 /** A reviewer's decision for one row, keyed by the employee result's `key`. */
@@ -152,6 +207,16 @@ export interface ProposalSettings {
   /** Count an employee once when the same company + ID + name appears on several rows. */
   dedupe: boolean;
   partTime: PartTimePlan;
+  /**
+   * How proposals are priced. 'standard' (the default): the full plan and the part-time plan.
+   * 'tiers': every employee goes into the highest of `tiers` their own savings cover.
+   */
+  pricingMode: 'standard' | 'tiers';
+  tiers: PricingTier[];
+  hceCap: HceCap;
+  /** Optional add-ons (dental, vision). Unselected, each employee's leftover savings show as a voluntary benefit surplus. */
+  voluntaryBenefits: VoluntaryBenefit[];
+  adminFee: EmployerAdminFee;
   /** Employer savings basis: Social Security + Medicare only (7.65%, or Medicare 1.45% where Social Security does not apply), or all employer taxes (adds FUTA, SUI, etc.). */
   employerSavingsBasis: 'fica' | 'all';
   /** Payroll model: a public retirement system the employer reports to (e.g. 'TX_TRS' for a Texas school district). Empty = private employer. */
@@ -198,7 +263,7 @@ export const DEFAULT_PROPOSAL_SETTINGS: ProposalSettings = {
     { id: 'mec_plus', name: 'MEC Plus', monthlyCost: 95 },
   ],
   benefitPackageId: 'standard',
-  allotmentThreshold: 149,
+  allotmentThreshold: 159,
   programPrices: [159, 149, 139, 129],
   lowIncomeMax: 26000,
   minHoursPerPeriod: 23,
@@ -208,7 +273,20 @@ export const DEFAULT_PROPOSAL_SETTINGS: ProposalSettings = {
   noFederalTaxAs: 'warning',
   includeCommission: false,
   dedupe: false,
-  partTime: { enabled: true, deductionPerCheck: 180, allotmentThreshold: 74, maxHoursPerWeek: 29, maxAnnualGross: 20000 },
+  partTime: { enabled: true, deductionPerCheck: 180, allotmentThreshold: 74, maxHoursPerWeek: 29, maxAnnualGross: 20000, monthlyPrice: 74, benefitPackageId: 'mec' },
+  pricingMode: 'standard',
+  tiers: [
+    { id: 'plus', name: 'Plus', deductionByFrequency: { monthly: 1293, semimonthly: 646.5, biweekly: 596.77, weekly: 298.38 }, monthlyPrice: 159, allotmentCutoff: 149, benefitPackageId: 'standard', fullTimeRules: true, enabled: true },
+    { id: 'standard', name: 'Standard', deductionByFrequency: { monthly: 1040, semimonthly: 520, biweekly: 480, weekly: 240 }, monthlyPrice: 117, allotmentCutoff: 120, benefitPackageId: 'standard', fullTimeRules: false, enabled: true },
+    { id: 'basic', name: 'Basic', deductionByFrequency: { monthly: 780, semimonthly: 390, biweekly: 360, weekly: 180 }, monthlyPrice: 74, allotmentCutoff: 74, benefitPackageId: 'mec', fullTimeRules: false, enabled: true },
+    { id: 'essential', name: 'Essential', deductionByFrequency: { monthly: 520, semimonthly: 260, biweekly: 240, weekly: 120 }, monthlyPrice: 31, allotmentCutoff: 60, benefitPackageId: 'mec', fullTimeRules: false, enabled: true },
+  ],
+  hceCap: { enabled: true, payOver: 160000, maxTierId: 'standard' },
+  voluntaryBenefits: [
+    { id: 'dental', name: 'Dental', monthlyCost: 30, selected: false },
+    { id: 'vision', name: 'Vision', monthlyCost: 20, selected: false },
+  ],
+  adminFee: { amount: 0, per: 'employee-month' },
   employerSavingsBasis: 'fica',
   retirementSystem: '',
   publicEmployer: { socialSecurityCovered: false, detectSocialSecurity: true, useFileContribution: true, cafeteriaReductionsCovered: true },
@@ -343,12 +421,24 @@ export interface ProposalEmployeeResult extends Partial<PlanCalc> {
   explanation?: EmployeeExplanation;
   /** The reviewer override applied to this row, if any. */
   override?: EmployeeOverride;
+  /**
+   * Enrolled employees: their monthly allotment less the plan price and any selected add-ons. What is left is the
+   * voluntary benefit surplus; negative means the add-ons cost more than their savings cover.
+   */
+  voluntary?: { price: number; addOns: { id: string; name: string; monthlyCost: number }[]; addOnCost: number; surplus: number };
+  /** Tier pricing only: the tier the employee was placed in. */
+  tier?: { id: string; name: string; deductionPerCheck: number; monthlyPrice: number; allotmentCutoff: number; allotment: number; capped?: string };
 }
 
 export interface ProgramAnalysis {
   price: number;
+  /** Employees on the full plan at this price. */
   eligible: number;
   partTimeEligible: number;
+  /** Part-time plan revenue and benefit cost a month (included in the totals below). */
+  partTimeRevenue: number;
+  partTimeBenefitCost: number;
+  /** Full plan plus part-time plan. */
   monthlyRevenue: number;
   monthlyBenefitCost: number;
   monthlyMargin: number;
@@ -357,23 +447,72 @@ export interface ProgramAnalysis {
 }
 
 /** What the margin analyzer needs from each employee result. */
-export type ProgramInput = Pick<ProposalEmployeeResult, 'passesNonSavingsRules' | 'eligibility'> & { monthly?: { allotment: number } };
+export type ProgramInput = Pick<ProposalEmployeeResult, 'passesNonSavingsRules' | 'eligibility'> & { monthly?: { allotment: number }; tier?: { id: string } | null };
+
+/** The part-time plan's price and benefit cost per enrollee per month, for the margin analyzer. */
+export interface PartTimePricing { price: number; benefitMonthlyCost: number }
 
 /**
  * The margin analyzer: for each program price, how many employees would qualify at that price and what First Gen
  * would earn. An employee counts when they pass every rule except the savings test and their allotment is at or above
  * the price (and under the review line). Margin is the price less the benefit package's cost, per employee per month.
+ * Part-time plan enrollees add their own price less their package's cost to every row.
  * The web app runs this same calculation in the browser to reprice instantly (apps/web/src/pricing.ts).
  */
-export function analyzePrograms(employees: ProgramInput[], prices: number[], benefitMonthlyCost: number, needsReviewAllotment: number): ProgramAnalysis[] {
+export function analyzePrograms(employees: ProgramInput[], prices: number[], benefitMonthlyCost: number, needsReviewAllotment: number, partTime: PartTimePricing = { price: 0, benefitMonthlyCost: 0 }): ProgramAnalysis[] {
   const r2 = (n: number) => Math.round(n * 100) / 100;
-  const partTime = employees.filter((e) => e.eligibility === 'PT Eligible').length;
+  const ptCount = employees.filter((e) => e.eligibility === 'PT Eligible').length;
+  const ptRevenue = ptCount * partTime.price;
+  const ptCost = ptCount * partTime.benefitMonthlyCost;
   return [...new Set(prices)].sort((a, b) => b - a).map((price) => {
     const eligible = employees.filter((e) => e.passesNonSavingsRules && e.monthly && e.monthly.allotment >= price && e.monthly.allotment < needsReviewAllotment).length;
-    const revenue = eligible * price;
-    const cost = eligible * benefitMonthlyCost;
-    return { price, eligible, partTimeEligible: partTime, monthlyRevenue: r2(revenue), monthlyBenefitCost: r2(cost), monthlyMargin: r2(revenue - cost), marginPercent: revenue ? Math.round(((revenue - cost) / revenue) * 1000) / 1000 : 0, annualMargin: r2((revenue - cost) * 12) };
+    const revenue = eligible * price + ptRevenue;
+    const cost = eligible * benefitMonthlyCost + ptCost;
+    return { price, eligible, partTimeEligible: ptCount, partTimeRevenue: r2(ptRevenue), partTimeBenefitCost: r2(ptCost), monthlyRevenue: r2(revenue), monthlyBenefitCost: r2(cost), monthlyMargin: r2(revenue - cost), marginPercent: revenue ? Math.round(((revenue - cost) / revenue) * 1000) / 1000 : 0, annualMargin: r2((revenue - cost) * 12) };
   });
+}
+
+export interface TierAnalysis {
+  id: string;
+  name: string;
+  /** Employees placed in this tier. */
+  enrolled: number;
+  price: number;
+  /** Benefit package cost per enrollee per month. */
+  benefitCost: number;
+  packageName: string;
+  /** Price less benefit cost, per enrollee per month. Negative means the tier loses money. */
+  marginPerEmployee: number;
+  monthlyRevenue: number;
+  monthlyBenefitCost: number;
+  monthlyMargin: number;
+  marginPercent: number;
+  annualMargin: number;
+  losesMoney: boolean;
+}
+
+/**
+ * The margin view for tier pricing: per tier, who was placed in it and what First Gen earns, plus a total row
+ * (id 'total'). A tier priced under its benefit package's cost is marked as losing money even with nobody in it.
+ * Mirrored in the browser by apps/web/src/pricing.ts so a typed price shows at once.
+ */
+export function analyzeTiers(employees: Pick<ProgramInput, 'eligibility' | 'tier'>[], tiers: PricingTier[], packages: BenefitPackage[]): TierAnalysis[] {
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  const pct = (m: number, r: number) => (r ? Math.round((m / r) * 1000) / 1000 : 0);
+  const rows = tiers.filter((t) => t.enabled).map((t) => {
+    const pkg = packages.find((p) => p.id === t.benefitPackageId);
+    const cost = pkg?.monthlyCost ?? 0;
+    const enrolled = employees.filter((e) => e.eligibility === 'Eligible' && e.tier?.id === t.id).length;
+    const revenue = enrolled * t.monthlyPrice;
+    const benefit = enrolled * cost;
+    return { id: t.id, name: t.name, enrolled, price: t.monthlyPrice, benefitCost: cost, packageName: pkg?.name ?? '', marginPerEmployee: r2(t.monthlyPrice - cost), monthlyRevenue: r2(revenue), monthlyBenefitCost: r2(benefit), monthlyMargin: r2(revenue - benefit), marginPercent: pct(revenue - benefit, revenue), annualMargin: r2((revenue - benefit) * 12), losesMoney: t.monthlyPrice < cost };
+  });
+  const sum = (k: 'enrolled' | 'monthlyRevenue' | 'monthlyBenefitCost') => rows.reduce((a, r) => a + r[k], 0);
+  const revenue = r2(sum('monthlyRevenue'));
+  const benefit = r2(sum('monthlyBenefitCost'));
+  const enrolled = sum('enrolled');
+  rows.push({ id: 'total', name: 'All tiers', enrolled, price: enrolled ? r2(revenue / enrolled) : 0, benefitCost: enrolled ? r2(benefit / enrolled) : 0, packageName: '', marginPerEmployee: enrolled ? r2((revenue - benefit) / enrolled) : 0, monthlyRevenue: revenue, monthlyBenefitCost: benefit, monthlyMargin: r2(revenue - benefit), marginPercent: pct(revenue - benefit, revenue), annualMargin: r2((revenue - benefit) * 12), losesMoney: revenue < benefit });
+  return rows;
 }
 
 export interface ProposalSummary {
@@ -388,9 +527,18 @@ export interface ProposalSummary {
   /** Employer tax savings of eligible employees (basis per settings). */
   employerAnnualSavings: { total: number; full: number; partTime: number; perEmployee: number };
   employeeAnnualTaxSavings: number;
+  /** Employer admin fee a year (0 when none is set), at the participation rate for a per-employee fee. */
+  adminFee: { amount: number; per: EmployerAdminFee['per']; annual: number };
+  /** Employer tax savings less the admin fee: what the employer keeps. Valuation uses this. */
+  employerNetAnnualSavings: number;
+  /** Selected add-ons and the enrolled employees' voluntary benefit surplus a month (sums at the participation rate). */
+  voluntary: { addOns: { id: string; name: string; monthlyCost: number }[]; addOnMonthlyCost: number; surplusMonthly: number; shortfalls: number };
   valuationIncrease: number;
   allotmentDistribution: { below: number; near: number; atOrAbove: number; lowEdge: number; highEdge: number };
   programs: ProgramAnalysis[];
+  pricingMode?: 'standard' | 'tiers';
+  /** Tier pricing only: each tier's enrollees and margin, then a total row (id 'total'). */
+  tiers?: TierAnalysis[];
   benefitPackage: BenefitPackage;
   dataWarnings: number;
   duplicates: { rowNumber?: number; duplicateOf?: number; name: string }[];
@@ -692,14 +840,17 @@ function unverifiedLines(input: PayInput, s: ProposalSettings, db: TaxDatabase):
 /** What the explanation needs to re-run an employee with different pay or W-4 details. */
 interface EvalContext { freq: PayFrequency; gross: number; otherComp: number; dedPerCheck: number; existing: number; date: string }
 const CONTEXT = new WeakMap<ProposalEmployeeResult, EvalContext>();
+/** Tier pricing: the settings the explanation measures a not-eligible employee against (the lowest tier they were tried for). */
+const EXPLAIN_SETTINGS = new WeakMap<ProposalEmployeeResult, ProposalSettings>();
 
 export function evaluateEmployee(row: CensusRow, s: ProposalSettings, db: TaxDatabase): ProposalEmployeeResult {
   const res = evaluateRules(row, s, db);
+  const es = EXPLAIN_SETTINGS.get(res) ?? s;
   try {
-    res.explanation = explainEmployee(res, s, db, CONTEXT.get(res));
+    res.explanation = explainEmployee(res, es, db, CONTEXT.get(res));
   } catch {
     // A what-if that cannot be calculated must not take the proposal down: fall back to the reason without one.
-    res.explanation = explainEmployee(res, s, db, undefined);
+    res.explanation = explainEmployee(res, es, db, undefined);
     res.flags.push('The "what would change it" estimate could not be calculated for this row.');
   }
   return res;
@@ -776,6 +927,13 @@ function evaluateRules(row: CensusRow, s: ProposalSettings, db: TaxDatabase): Pr
   const noFed = row.federalTaxPaid === false;
   CONTEXT.set(res, { freq, gross, otherComp, dedPerCheck, existing: r2(existing), date: checkDatesFor(s.year, freq)[0] });
 
+  // Tier pricing: the tier sets the deduction, unless a reviewer typed one for this person.
+  if (s.pricingMode === 'tiers' && !(ov?.deductionPerCheck && ov.deductionPerCheck > 0)) {
+    if (useRow) res.flags.push(`The file's First Gen deduction (${usd(row.proposedDeduction!)}) is not used: tier pricing sets each person's deduction.`);
+    enrollInTier(res, { input, freq, gross, otherComp, existing: r2(existing), annualGross, hoursPerPeriod, noFed }, s, db);
+    return applyStatusOverride(res, input, freq, gross, s, db);
+  }
+
   if (dedPerCheck + existing > gross + otherComp) {
     res.deductionPerCheck = dedPerCheck;
     res.perPeriod = { gross: gross + otherComp, firstGen: dedPerCheck, deductions: r2(existing), net: r2(gross + otherComp - existing - dedPerCheck), taxBefore: 0, taxAfter: 0, stateTaxBefore: 0, effectiveRate: 0 };
@@ -816,6 +974,95 @@ function evaluateRules(row: CensusRow, s: ProposalSettings, db: TaxDatabase): Pr
   if (noFed && s.noFederalTaxAs === 'warning') res.flags.unshift('⚠ No federal income tax withheld today according to the file.');
   res.passesNonSavingsRules = annualGross > s.lowIncomeMax && !(noFed && s.noFederalTaxAs === 'status') && hoursPerPeriod !== undefined && hoursPerPeriod >= s.minHoursPerPeriod;
   return applyStatusOverride(tryPartTime(res, input, freq, gross, s, db), input, freq, gross, s, db);
+}
+
+/** A tier's deduction per check for a pay frequency. Frequencies without their own amount get the semi-monthly (or monthly) year spread over their checks. */
+export function tierDeduction(t: Pick<PricingTier, 'deductionByFrequency'>, freq: PayFrequency): number {
+  const own = t.deductionByFrequency[freq];
+  if (own !== undefined && own > 0) return own;
+  const year = t.deductionByFrequency.semimonthly ? t.deductionByFrequency.semimonthly * 24 : (t.deductionByFrequency.monthly ?? 0) * 12;
+  return r2(year / PERIODS_PER_YEAR[freq]);
+}
+
+/** Why an employee is held at the HCE tier: an owner, or prior-year pay over the HCE line. Undefined when not capped. */
+export function hceCapReason(row: CensusRow, annualGross: number | undefined, s: Pick<ProposalSettings, 'hceCap'>): string | undefined {
+  const cap = s.hceCap;
+  if (!cap?.enabled) return undefined;
+  if (row.owner) return 'Owner';
+  if (row.priorYearPay !== undefined && row.priorYearPay !== null) return row.priorYearPay > cap.payOver ? `HCE: prior-year pay ${usd0(row.priorYearPay)} is over ${usd0(cap.payOver)}` : undefined;
+  if (annualGross !== undefined && annualGross > cap.payOver) return `HCE: pay of ${usd0(annualGross)} a year is over ${usd0(cap.payOver)} (no prior-year pay in the file, so this year's pay was used)`;
+  return undefined;
+}
+
+interface TierContext { input: PayInput; freq: PayFrequency; gross: number; otherComp: number; existing: number; annualGross: number; hoursPerPeriod?: number; noFed: boolean }
+
+/**
+ * Tier pricing: try each tier from the top and place the employee in the first one whose own deduction fits the
+ * check and whose savings reach its cutoff. Owners and HCEs start at the cap tier. Full-time tiers also need the
+ * low-income and minimum-hours rules to pass. The other review rules (no federal tax as a status, savings over the
+ * review line, missing hours, low data confidence) then apply as on the standard plan.
+ */
+function enrollInTier(res: ProposalEmployeeResult, c: TierContext, s: ProposalSettings, db: TaxDatabase): void {
+  const fail = (e: Eligibility, why: string, cause: EligibilityCause) => { res.eligibility = e; res.cause = cause; res.reasons.push(why); };
+  const tiers = s.tiers.filter((t) => t.enabled).sort((a, b) => b.allotmentCutoff - a.allotmentCutoff || b.monthlyPrice - a.monthlyPrice);
+  res.passesNonSavingsRules = c.annualGross > s.lowIncomeMax && !(c.noFed && s.noFederalTaxAs === 'status') && c.hoursPerPeriod !== undefined && c.hoursPerPeriod >= s.minHoursPerPeriod;
+  if (c.noFed && s.noFederalTaxAs === 'warning') res.flags.unshift('⚠ No federal income tax withheld today according to the file.');
+  if (!tiers.length) return fail('NEEDS REVIEW', 'Tier pricing is on but no tier is turned on.', 'reviewer');
+  const cap = hceCapReason(res.row, c.annualGross, s);
+  const capAt = cap ? tiers.findIndex((t) => t.id === s.hceCap.maxTierId) : -1;
+  const allowed = capAt > 0 ? tiers.slice(capAt) : tiers;
+  if (cap && capAt > 0) res.flags.push(`${cap}, so held at the ${tiers[capAt].name} tier or below.`);
+  const ftWhy: EligibilityCause | undefined = c.annualGross <= s.lowIncomeMax ? 'low-income' : c.hoursPerPeriod === undefined ? 'hours-missing' : c.hoursPerPeriod < s.minHoursPerPeriod ? 'hours' : undefined;
+  let last: { t: PricingTier; ded: number; why: EligibilityCause; calc?: PlanCalc } | undefined;
+  const tried: string[] = [];
+  for (const t of allowed) {
+    const ded = tierDeduction(t, c.freq);
+    if (t.fullTimeRules && ftWhy) {
+      last = { t, ded, why: ftWhy };
+      tried.push(`${t.name}: ${ftWhy === 'low-income' ? `pay of ${usd(c.annualGross)} a year is at or below ${usd(s.lowIncomeMax)}` : ftWhy === 'hours' ? `${res.hoursPerPeriod} hours per period is under ${s.minHoursPerPeriod}` : 'hours missing'}`);
+      continue;
+    }
+    if (ded + c.existing > c.gross + c.otherComp) {
+      last = { t, ded, why: 'funds' };
+      tried.push(`${t.name}: ${usd(ded)} deduction does not fit the check`);
+      continue;
+    }
+    const calc = planCalc(c.input, c.freq, c.gross, ded, s, db);
+    if (calc.monthly.allotment < t.allotmentCutoff) {
+      last = { t, ded, why: 'savings', calc };
+      tried.push(`${t.name}: allotment ${usd(calc.monthly.allotment)} is under ${usd(t.allotmentCutoff)}`);
+      continue;
+    }
+    // Placed in this tier.
+    Object.assign(res, calc);
+    res.tier = { id: t.id, name: t.name, deductionPerCheck: ded, monthlyPrice: t.monthlyPrice, allotmentCutoff: t.allotmentCutoff, allotment: calc.monthly.allotment, ...(cap && capAt > 0 ? { capped: cap } : {}) };
+    CONTEXT.set(res, { ...CONTEXT.get(res)!, dedPerCheck: ded });
+    if (tried.length) res.reasons.push(`Not a higher tier: ${tried.join('; ')}.`);
+    res.reasons.push(`${t.name} tier: ${usd(ded)} per check, allotment ${usd(calc.monthly.allotment)} a month (needs ${usd(t.allotmentCutoff)}), price ${usd(t.monthlyPrice)} a month.`);
+    const unv = unverifiedLines(c.input, s, db);
+    if (unv.length) res.flags.push(`Uses tax data not yet verified: ${unv.join(', ')}.`);
+    if (c.noFed && s.noFederalTaxAs === 'status') fail('No Federal Taxes Paid', 'No federal income tax is withheld today according to the file; review before enrolling.', 'no-federal-tax');
+    else if (calc.monthly.allotment >= s.needsReviewAllotment) fail('NEEDS REVIEW', `Monthly allotment ${usd(calc.monthly.allotment)} is at or above the ${usd(s.needsReviewAllotment)} review threshold.`, 'high-savings');
+    else if (c.hoursPerPeriod === undefined) fail('NEEDS REVIEW', 'Hours missing for an hourly employee.', 'hours-missing');
+    else if (s.reviewMinConfidence > 0 && res.row.confidence !== undefined && res.row.confidence < s.reviewMinConfidence) fail('NEEDS REVIEW', `Data confidence ${res.row.confidence} is below ${s.reviewMinConfidence}.`, 'confidence');
+    else res.eligibility = 'Eligible';
+    return;
+  }
+  // No tier fits: report against the lowest tier tried, which is the easiest one to reach.
+  const l = last!;
+  CONTEXT.set(res, { ...CONTEXT.get(res)!, dedPerCheck: l.ded });
+  EXPLAIN_SETTINGS.set(res, { ...s, allotmentThreshold: l.t.allotmentCutoff, deductionByFrequency: l.t.deductionByFrequency, ...(l.t.fullTimeRules ? {} : { lowIncomeMax: 0, minHoursPerPeriod: 0 }) });
+  if (l.calc) Object.assign(res, l.calc);
+  else {
+    res.deductionPerCheck = l.ded;
+    res.perPeriod = { gross: c.gross + c.otherComp, firstGen: l.ded, deductions: c.existing, net: r2(c.gross + c.otherComp - c.existing - l.ded), taxBefore: 0, taxAfter: 0, stateTaxBefore: 0, effectiveRate: 0 };
+  }
+  res.reasons.push(`No tier fits: ${tried.join('; ')}.`);
+  if (l.why === 'funds') fail('Not Eligible - Insufficient Funds', `The smallest tier's ${usd(l.ded)} deduction plus existing deductions exceed gross pay per check (${usd(c.gross + c.otherComp)}).`, 'funds');
+  else if (l.why === 'savings') fail(c.noFed ? 'Not Eligible - Insufficient Savings + No Federal Taxes Paid' : 'Not Eligible - Insufficient Savings', `Monthly allotment ${usd(l.calc!.monthly.allotment)} is below the ${usd(l.t.allotmentCutoff)} the ${l.t.name} tier needs.`, 'savings');
+  else if (l.why === 'low-income') fail('Not Eligible - Low Income', `Annual gross ${usd(c.annualGross)} is at or below ${usd(s.lowIncomeMax)}.`, 'low-income');
+  else if (l.why === 'hours') fail('Not Eligible - Insufficient Hours', `${res.hoursPerPeriod} hours per pay period is below the ${s.minHoursPerPeriod}-hour minimum.`, 'hours');
+  else fail('NEEDS REVIEW', 'Hours missing for an hourly employee.', 'hours-missing');
 }
 
 /** A reviewer's forced status wins over the rules; the rule result is kept in standardEligibility and the reasons. */
@@ -985,6 +1232,7 @@ function explainEmployee(res: ProposalEmployeeResult, s: ProposalSettings, db: T
   const pt = res.partTime;
   const planRule = res.cause === 'savings' || res.cause === 'low-income' || res.cause === 'hours' || res.cause === 'funds';
   if (e === 'Excluded') return make('notEligible', 'Left out', '', 'Left out of this proposal by the reviewer.');
+  if (e === 'Eligible' && res.tier) return make('eligible', `Eligible (${res.tier.name})`, '', `Qualifies for the ${res.tier.name} tier, with a ${usd(res.tier.deductionPerCheck)} deduction per check.`);
   if (e === 'Eligible') return make('eligible', 'Eligible', '', 'Qualifies for the full plan.');
   if (e === 'PT Eligible') {
     const why = pt?.triggers.some((t) => t.includes('hrs')) && res.hoursPerWeek !== undefined ? ` because they average ${hrs(res.hoursPerWeek)} a week`
@@ -1058,6 +1306,11 @@ export function runProposal(rows: CensusRow[], settings: Partial<ProposalSetting
     employer: { ...DEFAULT_PROPOSAL_SETTINGS.employer, ...(settings.employer ?? {}) },
     publicEmployer: { ...DEFAULT_PROPOSAL_SETTINGS.publicEmployer, ...(settings.publicEmployer ?? {}) },
     deductionByFrequency: { ...DEFAULT_PROPOSAL_SETTINGS.deductionByFrequency, ...(settings.deductionByFrequency ?? {}) },
+    pricingMode: settings.pricingMode === 'tiers' ? 'tiers' : 'standard',
+    tiers: (settings.tiers?.length ? settings.tiers : DEFAULT_PROPOSAL_SETTINGS.tiers).map((t) => ({ ...t, deductionByFrequency: { ...(t.deductionByFrequency ?? {}) } })),
+    hceCap: { ...DEFAULT_PROPOSAL_SETTINGS.hceCap, ...(settings.hceCap ?? {}) },
+    voluntaryBenefits: settings.voluntaryBenefits?.length ? settings.voluntaryBenefits : DEFAULT_PROPOSAL_SETTINGS.voluntaryBenefits,
+    adminFee: { ...DEFAULT_PROPOSAL_SETTINGS.adminFee, ...(settings.adminFee ?? {}) },
     overrides: settings.overrides ?? {},
     participationRate: settings.participationRate ?? DEFAULT_PROPOSAL_SETTINGS.participationRate,
   };
@@ -1077,6 +1330,17 @@ export function runProposal(rows: CensusRow[], settings: Partial<ProposalSetting
   const skip = new Set(s.dedupe ? duplicates.map((d) => d.rowNumber) : []);
   const employees = rows.filter((r) => !skip.has(r.rowNumber)).map((r) => evaluateEmployee({ ...r }, s, db));
 
+  // Voluntary benefits: each enrolled employee's savings less the plan price and the selected add-ons.
+  const addOns = s.voluntaryBenefits.filter((v) => v.selected && v.monthlyCost > 0).map((v) => ({ id: v.id, name: v.name, monthlyCost: v.monthlyCost }));
+  const addOnCost = r2(addOns.reduce((a, v) => a + v.monthlyCost, 0));
+  for (const e of employees) {
+    const allot = e.eligibility === 'Eligible' ? e.monthly?.allotment : e.eligibility === 'PT Eligible' ? e.partTime?.allotment : undefined;
+    if (allot === undefined) continue;
+    const price = e.eligibility === 'PT Eligible' ? s.partTime.monthlyPrice ?? 0 : e.tier ? e.tier.monthlyPrice : s.allotmentThreshold;
+    e.voluntary = { price, addOns, addOnCost, surplus: r2(allot - price - addOnCost) };
+    if (e.voluntary.surplus < 0 && addOns.length) e.flags.push(`The ${addOns.map((a) => a.name.toLowerCase()).join(' and ')} add-on${addOns.length > 1 ? 's' : ''} (${usd(addOnCost)} a month) cost more than the ${usd(r2(allot - price))} left after the plan price.`);
+  }
+
   const byEligibility: Record<string, number> = {};
   for (const e of employees) byEligibility[e.eligibility] = (byEligibility[e.eligibility] ?? 0) + 1;
   const full = employees.filter((e) => e.eligibility === 'Eligible');
@@ -1089,9 +1353,16 @@ export function runProposal(rows: CensusRow[], settings: Partial<ProposalSetting
   const pkg = s.benefitPackages.find((p) => p.id === s.benefitPackageId) ?? s.benefitPackages[0];
   const withAllot = employees.filter((e) => e.monthly);
   const lowEdge = s.allotmentThreshold - 10;
-  const programs = analyzePrograms(employees, s.programPrices, pkg?.monthlyCost ?? 0, s.needsReviewAllotment);
+  const ptPkg = s.benefitPackages.find((p) => p.id === s.partTime.benefitPackageId) ?? pkg;
+  const programs = analyzePrograms(employees, s.programPrices, pkg?.monthlyCost ?? 0, s.needsReviewAllotment, { price: s.partTime.monthlyPrice ?? 0, benefitMonthlyCost: ptPkg?.monthlyCost ?? 0 });
+  const tiers = s.pricingMode === 'tiers' ? analyzeTiers(employees, s.tiers, s.benefitPackages) : undefined;
 
   const erTotal = r2((erFull + erPt) * rate);
+  const enrolledCount = Math.round((full.length + pt.length) * rate);
+  const fee = Math.max(0, s.adminFee.amount || 0);
+  const feeAnnual = r2(s.adminFee.per === 'month' ? (enrolledCount ? fee * 12 : 0) : fee * 12 * (full.length + pt.length) * rate);
+  const erNet = r2(erTotal - feeAnnual);
+  const withVol = employees.filter((e) => e.voluntary);
   const freqCount = new Map<PayFrequency, number>();
   for (const e of [...full, ...pt]) if (e.frequency) freqCount.set(e.frequency, (freqCount.get(e.frequency) ?? 0) + 1);
   const topFreq = [...freqCount.entries()].sort((a, b) => b[1] - a[1])[0];
@@ -1117,7 +1388,10 @@ export function runProposal(rows: CensusRow[], settings: Partial<ProposalSetting
       monthlySavings: { total: r2((msFull + msPt) * rate), full: r2(msFull * rate), partTime: r2(msPt * rate), average: full.length ? r2(msFull / full.length) : 0, annual: r2((msFull + msPt) * 12 * rate) },
       employerAnnualSavings: { total: erTotal, full: r2(erFull * rate), partTime: r2(erPt * rate), perEmployee: full.length ? r2(erFull / full.length) : 0 },
       employeeAnnualTaxSavings: r2(sum(full.map((e) => e.monthly!.employeeTaxSavings * 12).concat(pt.map((e) => e.partTime!.calc.monthly.employeeTaxSavings * 12))) * rate),
-      valuationIncrease: r2(erTotal * s.ebitdaMultiple),
+      adminFee: { amount: fee, per: s.adminFee.per, annual: feeAnnual },
+      employerNetAnnualSavings: erNet,
+      voluntary: { addOns, addOnMonthlyCost: addOnCost, surplusMonthly: r2(withVol.reduce((a, e) => a + e.voluntary!.surplus, 0) * rate), shortfalls: withVol.filter((e) => e.voluntary!.surplus < 0).length },
+      valuationIncrease: r2(erNet * s.ebitdaMultiple),
       allotmentDistribution: {
         below: withAllot.filter((e) => e.monthly!.allotment < lowEdge).length,
         near: withAllot.filter((e) => e.monthly!.allotment >= lowEdge && e.monthly!.allotment < s.allotmentThreshold).length,
@@ -1126,6 +1400,8 @@ export function runProposal(rows: CensusRow[], settings: Partial<ProposalSetting
         highEdge: s.allotmentThreshold,
       },
       programs,
+      pricingMode: s.pricingMode,
+      ...(tiers ? { tiers } : {}),
       benefitPackage: pkg,
       dataWarnings: employees.reduce((a, e) => a + e.flags.length, 0),
       duplicates,
@@ -1179,6 +1455,8 @@ export const CENSUS_COLUMN_ALIASES: Record<keyof CensusRow, string[]> = {
   reimbursements: ['reimbursementsmiscellaneous', 'reimbursements miscellaneous', 'reimbursements'],
   confidence: ['confidence'],
   birthDate: ['birth date', 'date of birth', 'dob'],
+  owner: ['owner', 'is owner', 'business owner', 'owner yes no', '5% owner'],
+  priorYearPay: ['prior year pay', 'prior year compensation', 'prior year wages', 'last year pay', 'last year wages', 'prior year gross'],
 };
 
 export const normalizeHeader = (h: string) => h.toLowerCase().replace(/-/g, '').replace(/[$*#()/\\?_.:,]+/g, ' ').replace(/[^a-z0-9% ]/g, '').replace(/\s+/g, ' ').trim();
@@ -1207,8 +1485,8 @@ export function autoMapColumns(headers: string[]): Partial<Record<keyof CensusRo
   return out;
 }
 
-const NUMERIC: (keyof CensusRow)[] = ['grossPay', 'otherComp', 'periodsPerYear', 'hoursPerPeriod', 'hourlyRate', 'dependentAllowances', 'dependentCredits', 'additionalFit', 'stateDependents', 'additionalSit', 'healthMonthly', 'otherPretaxMonthly', 'retirementMonthly', 'retirementPercent', 'postTaxMonthly', 'retirementSystemContribution', 'proposedDeduction', 'tips', 'pto', 'reimbursements', 'confidence'];
-const BOOL: (keyof CensusRow)[] = ['federalTaxPaid', 'stateTaxPaid', 'socialSecurityPaid'];
+const NUMERIC: (keyof CensusRow)[] = ['grossPay', 'otherComp', 'periodsPerYear', 'hoursPerPeriod', 'hourlyRate', 'dependentAllowances', 'dependentCredits', 'additionalFit', 'stateDependents', 'additionalSit', 'healthMonthly', 'otherPretaxMonthly', 'retirementMonthly', 'retirementPercent', 'postTaxMonthly', 'retirementSystemContribution', 'proposedDeduction', 'tips', 'pto', 'reimbursements', 'confidence', 'priorYearPay'];
+const BOOL: (keyof CensusRow)[] = ['federalTaxPaid', 'stateTaxPaid', 'socialSecurityPaid', 'owner'];
 
 function toNumber(v: unknown): number | undefined {
   if (v === null || v === undefined || v === '') return undefined;
