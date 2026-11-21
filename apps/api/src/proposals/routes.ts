@@ -173,7 +173,7 @@ function allotmentSheet(wb: ExcelJS.Workbook, result: ProposalResult): void {
  * Build the proposal workbook: each employee's status and savings allotment, a summary tab, and the
  * underwriting sheet (the original columns with the calculated columns filled in).
  */
-export async function exportWorkbook(name: string, headers: string[], rawRows: Record<string, unknown>[], mapping: Record<string, string | null | undefined>, result: ProposalResult): Promise<Buffer> {
+export async function exportWorkbook(name: string, headers: string[], rawRows: Record<string, unknown>[], mapping: Record<string, string | null | undefined>, result: ProposalResult, withMargins = false): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   allotmentSheet(wb, result);
   const sum = wb.addWorksheet('Summary');
@@ -214,7 +214,8 @@ export async function exportWorkbook(name: string, headers: string[], rawRows: R
     ] : []),
     ...(multipleNote(result.settings.multipleInfo) ? [['Multiple', multipleNote(result.settings.multipleInfo)]] : []),
     [],
-    ...(s.tiers ? [
+    // Package costs and margins only in an admin's download.
+    ...(!withMargins ? [] : s.tiers ? [
       ['Tier', 'Enrolled', 'Price a month', 'Benefit cost each', 'Monthly revenue', 'Monthly margin', 'Margin %', '12-month margin'],
       ...s.tiers.map((t) => [t.id === 'total' ? t.name : t.losesMoney ? `${t.name} (loses money)` : t.name, t.enrolled, t.id === 'total' ? null : t.price, t.id === 'total' ? null : t.benefitCost, t.monthlyRevenue, t.monthlyMargin, t.marginPercent, t.annualMargin]),
     ] : [
@@ -276,9 +277,44 @@ async function defaultPackages() {
   return DEFAULT_PROPOSAL_SETTINGS.benefitPackages.map((p) => (typeof saved[p.id] === 'number' ? { ...p, monthlyCost: saved[p.id] } : { ...p }));
 }
 
+/** Fields that reveal what First Gen pays for a package or earns on it. Only people with margins.view (admins) get them. */
+const MARGIN_FIELDS = ['monthlyRevenue', 'monthlyBenefitCost', 'monthlyMargin', 'marginPercent', 'annualMargin', 'partTimeRevenue', 'benefitCost', 'marginPerEmployee', 'losesMoney'];
+const omit = (o: any, keys: string[]) => Object.fromEntries(Object.entries(o).filter(([k]) => !keys.includes(k)));
+
+/** A copy of an answer without package costs or margins. Employee rows are passed through untouched (they hold neither). */
+export function withoutMargins(x: any, depth = 0): any {
+  if (!x || typeof x !== 'object' || depth > 5 || Buffer.isBuffer(x) || x instanceof Date) return x;
+  if (Array.isArray(x)) return x.map((v) => withoutMargins(v, depth + 1));
+  const out: any = {};
+  for (const [k, v] of Object.entries(x)) {
+    if (['employees', 'results', 'raw_rows', 'rows', 'headers', 'mapping'].includes(k)) out[k] = v;
+    else if (k === 'benefitPackages' && Array.isArray(v)) out[k] = v.map((p) => (p && typeof p === 'object' ? omit(p, ['monthlyCost']) : p));
+    else if (k === 'benefitPackage' && v && typeof v === 'object') out[k] = omit(v, ['monthlyCost']);
+    else if ((k === 'programs' || k === 'tiers') && Array.isArray(v)) out[k] = v.map((r) => (r && typeof r === 'object' ? omit(r, MARGIN_FIELDS) : r));
+    else out[k] = withoutMargins(v, depth + 1);
+  }
+  return out;
+}
+
+/**
+ * Someone without margins.view never sees package costs, so whatever costs their request carries are replaced with the
+ * proposal's saved ones, or the admin defaults for a new proposal. They can pick a package; they cannot price it.
+ */
+async function trustedCosts<B extends { settings: Record<string, any> }>(req: FastifyRequest, b: B, saved?: Record<string, any>): Promise<B> {
+  if (can(req, 'margins.view')) return b;
+  const packages = saved?.benefitPackages?.length ? saved.benefitPackages : await defaultPackages();
+  return { ...b, settings: { ...b.settings, benefitPackages: packages } };
+}
+
 const PackageCostsIn = z.object({ costs: z.record(z.string().max(40), z.number().min(0).max(10000)) });
 
 export async function proposalRoutes(app: FastifyInstance) {
+  // Package costs and margins are for admins only: every proposal answer is stripped of them for everyone else.
+  app.addHook('preSerialization', async (req, _reply, payload) => {
+    const url = req.routeOptions?.url ?? '';
+    return url.startsWith('/api/proposals') && !can(req, 'margins.view') ? withoutMargins(payload) : payload;
+  });
+
   // Admin: change what a package costs First Gen. New proposals start from it; saved proposals keep their own.
   app.get('/api/admin/package-costs', async () => ({ packages: await defaultPackages() }));
   app.put('/api/admin/package-costs', async (req) => {
@@ -312,12 +348,17 @@ export async function proposalRoutes(app: FastifyInstance) {
     return { fileName: b.fileName, suggestedSheet: best.name, sheets: scored.map((s) => ({ name: s.name, headers: s.headers, rows: s.rows, mapping: s.mapping, truncated: s.truncated })) };
   });
 
-  app.post('/api/proposals/calculate', async (req) => calculate(Calc.parse(req.body)));
+  app.post('/api/proposals/calculate', async (req) => {
+    const b = Calc.extend({ id: z.string().uuid().nullish() }).parse(req.body);
+    const saved = b.id && !can(req, 'margins.view') ? (await load(req, b.id)).settings : undefined;
+    return calculate(await trustedCosts(req, b, saved));
+  });
 
   app.post('/api/proposals/export', async (req, reply) => {
-    const b = Calc.extend({ name: z.string().default('Proposal') }).parse(req.body);
-    const result = await calculate(b);
-    const buf = await heavy.run(() => exportWorkbook(b.name, b.headers, b.rows, b.mapping, result));
+    const b = Calc.extend({ name: z.string().default('Proposal'), id: z.string().uuid().nullish() }).parse(req.body);
+    const saved = b.id && !can(req, 'margins.view') ? (await load(req, b.id)).settings : undefined;
+    const result = await calculate(await trustedCosts(req, b, saved));
+    const buf = await heavy.run(() => exportWorkbook(b.name, b.headers, b.rows, b.mapping, result, can(req, 'margins.view')));
     reply.header('content-type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     reply.header('content-disposition', `attachment; filename="${b.name.replace(/[^\w .-]/g, '')} - Employee allotments.xlsx"`);
     return reply.send(buf);
@@ -351,6 +392,7 @@ export async function proposalRoutes(app: FastifyInstance) {
   const save = async (req: FastifyRequest, b: z.infer<typeof Save>, id?: string, event = id ? 'proposal.save' : 'proposal.create') => {
     // Check the person may change this proposal before doing the work of calculating it.
     const before = id ? await load(req, id) : undefined;
+    b = await trustedCosts(req, b, before?.settings);
     const result = await calculate(b);
     const summary = { ...result.summary, unmatchedMunicipalities: result.unmatchedMunicipalities };
     const vals = [b.name, b.clientId ?? null, b.company ?? null, b.fileName ?? null, b.sheetName ?? null, JSON.stringify(b.headers), JSON.stringify(b.rows), JSON.stringify(b.mapping), JSON.stringify(result.settings), JSON.stringify(summary), JSON.stringify(result.employees), b.status, b.notes ?? null, JSON.stringify(b.reportSettings ?? {})];
@@ -454,7 +496,7 @@ export async function proposalRoutes(app: FastifyInstance) {
   app.get('/api/proposals/:id/export', async (req, reply) => {
     const p = await load(req, (req.params as any).id);
     const result = { settings: p.settings, employees: p.results, summary: p.summary } as ProposalResult;
-    const buf = await heavy.run(() => exportWorkbook(p.name, p.headers, p.raw_rows, p.mapping, result));
+    const buf = await heavy.run(() => exportWorkbook(p.name, p.headers, p.raw_rows, p.mapping, result, can(req, 'margins.view')));
     reply.header('content-type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     reply.header('content-disposition', `attachment; filename="${String(p.name).replace(/[^\w .-]/g, '')} - Employee allotments.xlsx"`);
     return reply.send(buf);
