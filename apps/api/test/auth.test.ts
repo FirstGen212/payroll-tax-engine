@@ -170,7 +170,7 @@ describe('permission rules', () => {
       ['POST', '/api/proposals/:id/duplicate', 'proposals.edit'], ['POST', '/api/proposals/:id/status', 'proposals.edit'], ['GET', '/api/proposals/:id/revisions', 'proposals.view'],
       ['DELETE', '/api/proposals/:id', 'proposals.delete'], ['GET', '/api/proposals/:id/reports', 'proposals.view'], ['POST', '/api/proposals/:id/reports', 'proposals.share'],
       ['DELETE', '/api/proposals/:id/reports/:slug', 'proposals.share'], ['POST', '/api/proposals/:id/report-preview', 'proposals.view'], ['GET', '/api/proposals/:id/export', 'proposals.view'],
-      ['GET', '/api/admin/permissions', 'users.manage'], ['GET', '/api/admin/users', 'users.manage'], ['POST', '/api/admin/users', 'users.manage'], ['PUT', '/api/admin/users/:id', 'users.manage'],
+      ['GET', '/api/admin/permissions', 'users.manage'], ['GET', '/api/admin/package-costs', 'users.manage'], ['PUT', '/api/admin/package-costs', 'users.manage'], ['GET', '/api/admin/users', 'users.manage'], ['POST', '/api/admin/users', 'users.manage'], ['PUT', '/api/admin/users/:id', 'users.manage'],
       ['POST', '/api/admin/impersonate/:id', 'users.impersonate'], ['GET', '/api/admin/audit', 'audit.view'],
     ];
     for (const [method, route, want] of rules) expect([method, route, requiredPermission(method, route)]).toEqual([method, route, want]);
