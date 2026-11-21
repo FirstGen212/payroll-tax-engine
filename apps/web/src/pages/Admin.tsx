@@ -46,7 +46,7 @@ const blank = { id: '', name: '', email: '', role: 'analyst', extraPermissions: 
 export default function Admin() {
   const can = useCan();
   const { actor, reload } = useAuth();
-  const [tab, setTab] = useState<'users' | 'roles' | 'audit'>(can('users.manage') ? 'users' : 'audit');
+  const [tab, setTab] = useState<'users' | 'roles' | 'costs' | 'audit'>(can('users.manage') ? 'users' : 'audit');
   const [meta, setMeta] = useState<{ permissions: any[]; roles: any[] }>();
   const [users, setUsers] = useState<any[]>([]);
   const [edit, setEdit] = useState<typeof blank>();
@@ -84,7 +84,7 @@ export default function Admin() {
   };
 
   const activeCount = users.filter((u) => u.active).length;
-  const tabs: [typeof tab, string, boolean][] = [['users', 'Users', can('users.manage')], ['roles', 'Roles and permissions', can('users.manage')], ['audit', 'Audit log', can('audit.view')]];
+  const tabs: [typeof tab, string, boolean][] = [['users', 'Users', can('users.manage')], ['roles', 'Roles and permissions', can('users.manage')], ['costs', 'Package costs', can('users.manage')], ['audit', 'Audit log', can('audit.view')]];
   return (
     <>
       <PageHead eyebrow="Admin" title="Users and access">
@@ -171,8 +171,39 @@ export default function Admin() {
         </div>
       )}
 
+      {tab === 'costs' && <PackageCosts />}
       {tab === 'audit' && <AuditLog users={users} />}
     </>
+  );
+}
+
+/** What each benefit package costs First Gen per enrollee a month. Internal: it sets margins and never reaches a client. */
+function PackageCosts() {
+  const [pkgs, setPkgs] = useState<any[]>();
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [note, setNote] = useState('');
+  const [err, setErr] = useState('');
+  const show = (r: any) => { setPkgs(r.packages); setDraft(Object.fromEntries(r.packages.map((p: any) => [p.id, String(p.monthlyCost)]))); };
+  useEffect(() => { api('/admin/package-costs').then(show).catch((e) => setErr(e.message)); }, []);
+  const save = async () => {
+    setErr(''); setNote('');
+    const costs = Object.fromEntries(Object.entries(draft).map(([k, v]) => [k, Number(v)]));
+    if (Object.values(costs).some((v) => !Number.isFinite(v) || v < 0)) { setErr('Each cost must be a number, $0 or more.'); return; }
+    try { show(await api('/admin/package-costs', { method: 'PUT', json: { costs } })); setNote('Saved. New proposals use these costs; saved proposals keep their own until you change them under Edit.'); } catch (e: any) { setErr(e.message); }
+  };
+  return (
+    <div className="panel">
+      <h3>Package costs</h3>
+      <p className="fg-note">What First Gen pays per enrolled employee each month. These set the margins in the margin analyzer and the Excel margin sheet. Clients never see them.</p>
+      {err && <div className="err" style={{ marginBottom: 12 }}>{err}</div>}
+      {note && <div className="fg-callout" role="status" style={{ marginBottom: 12 }}>{note}</div>}
+      {pkgs && <>
+        <div className="row" style={{ gap: 16, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          {pkgs.map((p) => <label key={p.id}>{p.name} ($ a month)<input type="number" min={0} step="0.01" style={{ width: 110 }} value={draft[p.id] ?? ''} onChange={(e) => setDraft({ ...draft, [p.id]: e.target.value })} /></label>)}
+          <button className="primary" onClick={save}>Save costs</button>
+        </div>
+      </>}
+    </div>
   );
 }
 

@@ -263,9 +263,36 @@ export async function exportWorkbook(name: string, headers: string[], rawRows: R
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
+/** What each benefit package costs First Gen, as an admin last set it (internal: never on a client page). */
+export async function packageCosts(): Promise<Record<string, number>> {
+  const [row] = await q(`select value from app_setting where key='package_costs'`);
+  return (row?.value as Record<string, number>) ?? {};
+}
+
+/** The default packages with any cost an admin saved. */
+async function defaultPackages() {
+  const saved = await packageCosts();
+  return DEFAULT_PROPOSAL_SETTINGS.benefitPackages.map((p) => (typeof saved[p.id] === 'number' ? { ...p, monthlyCost: saved[p.id] } : { ...p }));
+}
+
+const PackageCostsIn = z.object({ costs: z.record(z.string().max(40), z.number().min(0).max(10000)) });
+
 export async function proposalRoutes(app: FastifyInstance) {
+  // Admin: change what a package costs First Gen. New proposals start from it; saved proposals keep their own.
+  app.get('/api/admin/package-costs', async () => ({ packages: await defaultPackages() }));
+  app.put('/api/admin/package-costs', async (req) => {
+    const b = PackageCostsIn.parse(req.body);
+    const known = new Set(DEFAULT_PROPOSAL_SETTINGS.benefitPackages.map((p) => p.id));
+    const costs = Object.fromEntries(Object.entries(b.costs).filter(([k]) => known.has(k)).map(([k, v]) => [k, Math.round(v * 100) / 100]));
+    const before = await packageCosts();
+    await q(`insert into app_setting(key, value, updated_at, updated_by) values('package_costs', $1, now(), $2)
+             on conflict (key) do update set value=excluded.value, updated_at=now(), updated_by=excluded.updated_by`, [JSON.stringify({ ...before, ...costs }), req.actor?.id ?? null]);
+    await audit(req, 'settings.package_costs', null, { before, after: { ...before, ...costs } });
+    return { packages: await defaultPackages() };
+  });
+
   app.get('/api/proposals/defaults', async () => ({
-    settings: DEFAULT_PROPOSAL_SETTINGS,
+    settings: { ...DEFAULT_PROPOSAL_SETTINGS, benefitPackages: await defaultPackages() },
     fields: Object.keys(CENSUS_COLUMN_ALIASES).filter((k) => !['rowNumber', 'localCodes'].includes(k)),
     eligibilityOrder: ELIGIBILITY_ORDER,
   }));
